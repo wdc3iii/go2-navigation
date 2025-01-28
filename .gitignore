@@ -1,0 +1,73 @@
+# General
+*.log
+*.swp
+*.swo
+*.tmp
+*.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pkl
+*.pdb
+*.egg-info/
+*.eggs/
+*.pytest_cache/
+.cache/
+dist/
+build/
+env/
+.venv/
+*.env
+*.env.*
+*.tox/
+
+# ROS 2
+build/
+install/
+log/
+.colcon/
+CMakeLists.txt.user
+*.rosinstall
+*.launch.pyc
+
+# C++
+*.o
+*.out
+*.a
+*.so
+*.lo
+*.la
+*.d
+*.dSYM/
+Makefile.user
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# VSCode
+.vscode/
+*.code-workspace
+history/
+workspaceStorage/
+
+# PyCharm
+.idea/
+*.iml
+*.ipr
+*.iws
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/shelf/
+.idea/**/vcs.xml
+
+# Additional tools and editors
+.vscode-test/
+node_modules/
+npm-debug.log*
+.yarn/
+.yarn-integrity
+yarn-error.log
+coverage/
