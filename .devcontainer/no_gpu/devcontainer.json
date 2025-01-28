@@ -2,7 +2,7 @@
     "name": "Go2 Navigation No-GPU Dev Container",
     "dockerComposeFile": "../../docker/docker-compose-no-gpu.yml",
     "service": "go2-navigation",
-    "workspaceFolder": "${localEnv:HOME}/go2-navigation",
+    "workspaceFolder": "${localEnv:HOME}/repos/go2-navigation",
     "shutdownAction": "stopCompose",
     "customizations": {
         "vscode": {
