@@ -47,9 +47,12 @@ RUN groupadd --gid $GID $USER && \
 # switch to new user and workdir
 USER ${UID}
 
+
+
 RUN echo "About to pull obelisk."
 
 # clone Obelisk into this docker image at the $OBELISK_ROOT path
+WORKDIR /home/${USER}
 RUN git clone -b unitree-interface --single-branch https://github.com/Caltech-AMBER/obelisk.git /home/${USER}/obelisk
 ENV OBELISK_ROOT=/home/${USER}/obelisk
 
@@ -58,8 +61,10 @@ ENV OBELISK_ROOT=/home/${USER}/obelisk
 WORKDIR /home/${USER}
 RUN source /home/${USER}/obelisk/setup.sh --install-sys-deps --cyclone-perf --obk-aliases --basic
 
+# Set up python environment
 WORKDIR /home/${USER}/repos/go2-navigation
-RUN python -m venv /home/${USER}/venv 
-ENV PATH="/home/${USER}/venv/bin:$PATH"
-
+COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
+
+ENV ROS_DOMAIN_ID=5
+ENV OBELISK_BUILD_UNITREE=true
