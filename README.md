@@ -1,2 +1,2 @@
-# Go2-Navigation
-Repository aimed at running outdoo
+# go2-navigation
+Repository aimed at running SLAM-based navigation on the Go2

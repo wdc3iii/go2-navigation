@@ -1,0 +1,38 @@
+services:
+  go2-navigation:
+    shm_size: '12gb'
+    build:
+      context: .
+      args:
+        USER: $USER
+        UID: $UID
+        GID: $UID
+        GO2_NAVIGATION_ROOT: $GO2_NAVIGATION_ROOT
+      dockerfile: Dockerfile
+    network_mode: host
+    ipc: host
+    environment:
+      DISPLAY: $DISPLAY
+      USER: $USER
+      UID: $UID
+      GID: $UID
+      GO2_NAVIGATION_ROOT: $GO2_NAVIGATION_ROOT
+      QT_X11_NO_MITSHM: 1
+    security_opt:
+      - seccomp=unconfined
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./../:$GO2_NAVIGATION_ROOT
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - $HOME/.Xauthority:$HOME/.Xauthority:rw
+      # - $HOME/.bashrc:$HOME/.bashrc
+      - ../:$HOME/go2_navigation
+      - ../../IsaacLab:$HOME/IsaacLab
+    ports:
+      - 7007:7007
+    privileged: true
+    working_dir: $GO2_NAVIGATION_ROOT
+    stdin_open: true
+    tty: true
+    command: /bin/bash
