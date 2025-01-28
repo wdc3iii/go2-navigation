@@ -30,6 +30,9 @@ RUN apt-get update && apt-get install -y \
     libeigen3-dev \
     x11-apps \
     locales \
+    python3.10 \
+    python3.10-venv \
+    python3-pip \
     sudo && \
     rm -rf /var/lib/apt/lists/* && \
     locale-gen en_US.UTF-8
@@ -55,4 +58,8 @@ ENV OBELISK_ROOT=/home/${USER}/obelisk
 WORKDIR /home/${USER}
 RUN source /home/${USER}/obelisk/setup.sh --install-sys-deps --cyclone-perf --obk-aliases --basic
 
-WORKDIR /home/${USER}
+WORKDIR /home/${USER}/repos/go2-navigation
+RUN python -m venv /home/${USER}/venv 
+ENV PATH="/home/${USER}/venv/bin:$PATH"
+
+RUN pip install --upgrade pip && pip install -r requirements.txt
