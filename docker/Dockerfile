@@ -47,8 +47,6 @@ RUN groupadd --gid $GID $USER && \
 # switch to new user and workdir
 USER ${UID}
 
-
-
 RUN echo "About to pull obelisk."
 
 # clone Obelisk into this docker image at the $OBELISK_ROOT path
