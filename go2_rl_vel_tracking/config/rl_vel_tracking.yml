@@ -4,7 +4,8 @@ onboard:
   # ----- Low Level Controller ----- #
     - pkg: go2_rl_vel_tracking
       params:
-        policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-20_23-24-01/exported/policy.pt"
+        # policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-20_23-24-01/exported/policy.pt"
+        policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-29_10-36-24/exported/policy.pt"
         action_scale: 0.25
       executable: vel_tracking_controller
       # callback_groups:
@@ -78,29 +79,29 @@ onboard:
   # sensing:
   robot:
     # === simulation ===
-    # - is_simulated: True
-    #   pkg: obelisk_unitree_cpp
-    #   executable: obelisk_unitree_sim
-    #   params:
-    #     ic_keyframe: standing_isaac
-    # === hardware ===
-    - is_simulated: False
+    - is_simulated: True
       pkg: obelisk_unitree_cpp
-      executable: obelisk_unitree_go2_hardware
+      executable: obelisk_unitree_sim
       params:
-        network_interface_name: enx001cc24ce09a
-        default_kp: [
-                    60., 60., 60.,    # FR
-                    60., 60., 60.,    # FL
-                    60., 60., 60.,    # RR
-                    60., 60., 60.,    # RL
-                    ]
-        default_kd: [
-                    5., 5., 5.,    # FR
-                    5., 5., 5.,    # FL
-                    5., 5., 5.,    # RR
-                    5., 5., 5.,    # RL
-        ]
+        ic_keyframe: standing_isaac
+    # === hardware ===
+    # - is_simulated: False
+    #   pkg: obelisk_unitree_cpp
+    #   executable: obelisk_unitree_go2_hardware
+    #   params:
+    #     network_interface_name: enx001cc24ce09a
+    #     default_kp: [
+    #                 60., 60., 60.,    # FR
+    #                 60., 60., 60.,    # FL
+    #                 60., 60., 60.,    # RR
+    #                 60., 60., 60.,    # RL
+    #                 ]
+    #     default_kd: [
+    #                 5., 5., 5.,    # FR
+    #                 5., 5., 5.,    # FL
+    #                 5., 5., 5.,    # RR
+    #                 5., 5., 5.,    # RL
+    #     ]
     # ==================
       # callback_groups:
       publishers:

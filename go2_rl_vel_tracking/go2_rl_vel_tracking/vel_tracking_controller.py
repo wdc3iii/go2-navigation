@@ -46,6 +46,10 @@ class VelocityTrackingController(ObeliskController):
         self.kps = self.get_parameter("kps").get_parameter_value().double_array_value
         self.kds = self.get_parameter("kds").get_parameter_value().double_array_value
 
+        # Phase info
+        self.declare_parameter("phase_period", 0.3)
+        self.phase_period = self.get_parameter("phase_period").get_parameter_value().double_value
+
         # Get default angles
         self.joint_names_isaac = [
             "FL_hip_joint", "FR_hip_joint", "RL_hip_joint", "RR_hip_joint",
@@ -83,8 +87,10 @@ class VelocityTrackingController(ObeliskController):
         self.proj_g = np.zeros((3,))
         self.proj_g[2] = -1
         self.omega = np.zeros((3,))
+        self.phase = np.zeros((2,))
         self.zero_action = np.zeros((self.num_motors,))
         self.action = self.zero_action.tolist()
+        self.t_start = None
         
         return TransitionCallbackReturn.SUCCESS
 
@@ -113,6 +119,9 @@ class VelocityTrackingController(ObeliskController):
             self.omega = np.array(x_hat_msg.v_base[3:6])
         else:
             self.get_logger().error(f"Estimated State base velocity size does not match URDF! Size is {len(x_hat_msg.v_base)} instead of 6.")
+
+        theta = 2 * np.pi / self.phase_period * (x_hat_msg.header.stamp.sec + x_hat_msg.header.stamp.nanosec * 1e-9)
+        self.phase = np.array([np.cos(theta), np.sin(theta)])
 
     def joystick_callback(self, cmd_msg: VelocityCommand):
         self.cmd_vel[0] = cmd_msg.v_x
@@ -147,7 +156,8 @@ class VelocityTrackingController(ObeliskController):
             self.cmd_vel,
             (self.joint_pos - self.default_angles_mujoco)[self.mujoco_to_isaac],
             self.joint_vel[self.mujoco_to_isaac],
-            self.action
+            self.action,
+            self.phase
         ])
 
         # Call RL model

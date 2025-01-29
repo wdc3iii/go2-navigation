@@ -44,9 +44,9 @@ Set logging dir:
 ```
 export ROS_HOME=~/sample-contact-walking
 ```
-## Launch the Achilles stack:
+## Launch the Go2-Nav stack:
 ```
-obk-launch config_file_path=${SAMPLE_WALKING_ROOT}/sample_contact_walking/configs/achilles_sim_config.yaml device_name=onboard auto_start=configure bag=false
+obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_rl_vel_tracking/share/go2_rl_vel_tracking/config/rl_vel_tracking.yml device_name=onboard
 ```
 
 Wait for the viz software to connect then run in a seperate terminal:
