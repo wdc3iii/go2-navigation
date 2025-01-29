@@ -4,7 +4,7 @@
   <name>go2_rl_description</name>
   <version>0.0.1</version>
   <description>Robot files for the Unitree Go2</description>
-  <maintainer email="zach.olkin@gmail.com">zolkin</maintainer>
+  <maintainer email="wdc3iii@gmail.com">wcompton</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
