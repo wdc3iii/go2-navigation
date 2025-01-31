@@ -5,7 +5,9 @@ onboard:
     - pkg: go2_rl_vel_tracking
       params:
         # policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-20_23-24-01/exported/policy.pt"
-        policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-29_10-36-24/exported/policy.pt"
+        # policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-29_10-36-24/exported/policy.pt"
+        # policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-30_13-47-24/exported/policy.pt"
+        policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-01-30_15-40-24/exported/policy.pt"
         action_scale: 0.25
       executable: vel_tracking_controller
       # callback_groups:
@@ -185,6 +187,13 @@ onboard:
               imu_acc_sensor: accelerometer
               imu_gyro_sensor: gyro
               imu_quat_sensor: framequat
+          # ---------- Torso IMU ---------- #
+          - topic: /obelisk/go2/mocap
+            dt: 0.001
+            msg_type: ObkFramePose
+            sensor_names:
+              base_mocap_pos_sensor: framepos
+              base_mocap_quat_sensor: framequat
       timers:
         - ros_parameter: timer_sensor_setting
           timer_period_sec: 0.02
