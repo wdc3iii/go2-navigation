@@ -29,39 +29,70 @@ def generate_maze(width, height):
 
     return maze
 
-def plot_maze(maze, path):
+def plot_maze(maze, path, last_path, frontiers):
     """Plot the maze using matplotlib."""
     plt.figure(figsize=(8, 8))
-    plt.imshow(maze.T, cmap="binary", origin="lower")
+    plt.imshow(maze.T, cmap="gray_r", origin="lower")
     plt.xticks([]), plt.yticks([])  # Hide axis ticks
     if path is not None:
         x = np.array([n[0] for n in path])
         y = np.array([n[1] for n in path])
         plt.plot(x, y, 'r')
+    if last_path is not None:
+        x = np.array([n[0] for n in last_path])
+        y = np.array([n[1] for n in last_path])
+        plt.plot(x, y, '--r')
+    if frontiers is not None:
+        for front in frontiers:
+            x = np.array([n[0] for n in front])
+            y = np.array([n[1] for n in front])
+            plt.plot(x, y, 'g.')
     plt.show()
 
 if __name__ == '__main__':
     # Generate and plot the maze
     maze_width, maze_height = 21, 21  # Odd dimensions for proper maze generation
-    occupancy_grid = generate_maze(maze_width, maze_height)
     scale = 4
-    occupancy_grid = zoom(occupancy_grid, scale, order=0)
+    sensing_range = 10
+    occ_grid_gt = generate_maze(maze_width, maze_height)
+
+    occ_grid_gt = zoom(occ_grid_gt, scale, order=0)
     front = Frontier()
-    front.update_map(occupancy_grid, (0, 0))
+    front.update_map(np.ones_like(occ_grid_gt) * Frontier.UNCERTAIN, (0, 0))
     start = None
     goal = None
     for r in range(maze_height * scale):
         for c in range(maze_width * scale):
-            if occupancy_grid[r][c] == Frontier.FREE:
+            if occ_grid_gt[r][c] == Frontier.FREE:
                 if start is None:
                     start = (r, c)
                 goal = (r, c)
-    path = front.find_frontiers_to_goal(start, goal)
 
-    # Display the maze
-    plot_maze(occupancy_grid, path)
+    last_path = None
+    path = None
+    solved = False
+    curr_state = start
+    plot_maze(occ_grid_gt, [start], [goal], None)
+    while not solved:
+        last_path = path
 
+        # Sense
+        r_l = max(curr_state[0] - sensing_range, 0)
+        r_u = min(curr_state[0] + sensing_range, maze_height * scale - 1)
+        c_l = max(curr_state[1] - sensing_range, 0)
+        c_u = min(curr_state[1] + sensing_range, maze_height * scale - 1)
+        front.update_map(occ_grid_gt[r_l:r_u, c_l:c_u], (r_l, c_l))
+
+        # Plan
+        path, frontiers = front.find_frontiers_to_goal(curr_state, goal)
+
+        # Display the maze
+        plot_maze(front.map, path, last_path, frontiers)
+
+        curr_state = path[-1]
+        if path[-1] == goal:
+            solved = True
 
     # Return the occupancy grid
-    occupancy_grid
+    occ_grid_gt
 
