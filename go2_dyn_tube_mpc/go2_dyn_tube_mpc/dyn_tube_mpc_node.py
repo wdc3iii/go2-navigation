@@ -23,7 +23,7 @@ debugpy.listen(("localhost", 5678))  # Port 5678 for debugging
 print("Waiting for debugger...")
 debugpy.wait_for_client()  # Pauses execution until debugger is attached
 
-class DynamicTubeMPC(ObeliskController):
+class DynamicTubeMPCNode(ObeliskController):
     """Dynamic Tube MPC.
     pub: publishes optimized trajectory
     sub: estimated state of robot
@@ -197,40 +197,7 @@ class DynamicTubeMPC(ObeliskController):
 
 def main(args: Optional[List] = None) -> None:
     """Main entrypoint."""
-    spin_obelisk(args, DynamicTubeMPC, SingleThreadedExecutor)
-
-# def main():
-#     import rclpy
-#     rclpy.init()
-
-#     dtmpc_node = DynamicTubeMPC()
-
-#     from lifecycle_msgs.msg import State
-#     fake_state = State()
-#     fake_state.id = State.PRIMARY_STATE_UNCONFIGURED  # Example state ID
-
-#     dtmpc_node.on_configure(fake_state)
-
-#     traj = Trajectory()
-#     zt = np.hstack([
-#         np.arange(0, dtmpc_node.N + 1)[:, None] * dtmpc_node.dt,
-#         np.zeros((dtmpc_node.N + 1, 1)),
-#         np.zeros((dtmpc_node.N + 1, 1))
-#     ]) * dtmpc_node.v_max
-#     traj.z = zt.flatten().tolist()
-#     vt = np.vstack([
-#         np.ones((dtmpc_node.N, 1)) * dtmpc_node.dt,
-#         np.zeros((dtmpc_node.N, 1)),
-#         np.zeros((dtmpc_node.N, 1))
-#     ]) * dtmpc_node.v_max
-#     traj.v = vt.flatten().tolist()
-#     traj.n = dtmpc_node.n
-#     traj.n = dtmpc_node.m
-#     traj.horizon = dtmpc_node.N
-
-#     dtmpc_node.plan_callback(traj)
-
-#     z, v = dtmpc_node.solve_dtmpc()
+    spin_obelisk(args, DynamicTubeMPCNode, SingleThreadedExecutor)
 
 
 if __name__ == "__main__":
