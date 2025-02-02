@@ -22,7 +22,7 @@ onboard:
           history_depth: 10
           callback_group: None
         # ----- Joystick subscriber ----- #
-        - ros_parameter: sub_high_level_ctrl_setting
+        - ros_parameter: sub_vel_cmd_setting
           topic: /obelisk/go2/high_level_ctrl
           history_depth: 10
           callback_group: None

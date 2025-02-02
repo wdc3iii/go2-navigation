@@ -70,9 +70,9 @@ class VelocityTrackingController(ObeliskController):
         
         # Declare subscriber to velocity commands
         self.register_obk_subscription(
-            "sub_high_level_ctrl_setting",
-            self.joystick_callback,  # type: ignore
-            key="sub_high_level_ctrl_key",  # key can be specified here or in the config file
+            "sub_vel_cmd_setting",
+            self.vel_cmd_callback,  # type: ignore
+            key="sub_vel_cmd_key",  # key can be specified here or in the config file
             msg_type=VelocityCommand
         )
 
@@ -123,7 +123,7 @@ class VelocityTrackingController(ObeliskController):
         theta = 2 * np.pi / self.phase_period * (x_hat_msg.header.stamp.sec + x_hat_msg.header.stamp.nanosec * 1e-9)
         self.phase = np.array([np.cos(theta), np.sin(theta)])
 
-    def joystick_callback(self, cmd_msg: VelocityCommand):
+    def vel_cmd_callback(self, cmd_msg: VelocityCommand):
         self.cmd_vel[0] = cmd_msg.v_x
         self.cmd_vel[1] = cmd_msg.v_y
         self.cmd_vel[2] = cmd_msg.w_z
