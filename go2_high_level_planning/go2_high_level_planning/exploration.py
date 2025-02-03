@@ -2,7 +2,7 @@ import numpy as np
 import heapq
 import random
 
-class Frontier:
+class Exploration:
 
     def __init__(
         self, min_frontier_size,
@@ -28,6 +28,7 @@ class Frontier:
         self.front_size_weight = front_size_weight
 
     def update_map(self, map_update, origin):
+        # TODO: Buffer map by robot diameter for consistency?
         if self.map is None:
             self.map = map_update
         else:

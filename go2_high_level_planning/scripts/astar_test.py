@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import random
-from go2_high_level_planning.exploration import Frontier
+from go2_high_level_planning.exploration import Exploration
 from scipy.ndimage import zoom
 import time
 
@@ -63,7 +63,7 @@ if __name__ == '__main__':
     occ_grid_gt = generate_maze(maze_width, maze_height)
 
     occ_grid_gt = zoom(occ_grid_gt, scale, order=0)
-    front = Frontier(2, free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED)
+    front = Exploration(2, free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED)
     front.update_map(np.ones_like(occ_grid_gt), (0, 0))
     start = None
     goal = None

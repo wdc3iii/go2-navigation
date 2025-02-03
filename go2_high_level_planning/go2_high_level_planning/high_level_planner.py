@@ -11,19 +11,12 @@ from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
-import casadi as ca
-import torch
-from go2_dyn_tube_mpc.casadi_utils import (
-    quadratic_objective, dynamics_constraints, initial_condition_equality_constraint, setup_parameterized_ocp
-)
+from go2_high_level_planning.exploration import Exploration
+from geometry_msgs.msg import Pose2D
+from nav_msgs.msg import OccupancyGrid, OccupancyGridUpdate
 
 
-debugpy.listen(("localhost", 5678))  # Port 5678 for debugging
-print("Waiting for debugger...")
-debugpy.wait_for_client()  # Pauses execution until debugger is attached
-
-
-class DynamicTubeMPCNode(ObeliskController):
+class HighLevelPlannerNode(ObeliskController):
     """Dynamic Tube MPC.
     pub: publishes optimized trajectory
     sub: estimated state of robot
@@ -36,79 +29,55 @@ class DynamicTubeMPCNode(ObeliskController):
     def __init__(self, node_name: str = "dynamic_tube_mpc_controller") -> None:
         """Initialize the example position setpoint controller."""
         super().__init__(node_name, Trajectory, EstimatedState)
-        self.n = 3
-        self.m = 3
-        # Load policy
-        # self.declare_parameter("tube_path", "")
-        # tube_path = self.get_parameter("tube_path").get_parameter_value().string_value
-        # self.tube_dyn = torch.load(tube_path)
-        # self.device = next(self.tube_policy.parameters()).device
-        # self.get_logger().info(f"Tube Dynamics: {tube_path} loaded on {self.device}. {len(self.kps)}, {len(self.kds)}")
 
         # Load DTMPC parameters
         # Horizon length, timing
-        self.declare_parameter("N", 20)
-        self.N = self.get_parameter("N").get_parameter_value().integer_value
-        self.declare_parameter("dt", 0.1)
-        self.dt = self.get_parameter("dt").get_parameter_value().double_value
-        self.ts = np.arange(0, self.N + 1) * self.dt
+        self.declare_parameter("min_frontier_size", 5)
+        self.explorer = Exploration(
+            min_frontier_size=self.get_parameter("min_frontier_size").integer_value,
+            free=0, uncertain=1, occupied=100
+        )
 
         # Velocity bounds
-        self.declare_parameter("v_max", [0.5, 0.5, 0.5])
-        self.v_max_bound = np.array(self.get_parameter("v_max").get_parameter_value().double_array_value)
-        self.declare_parameter("v_min", [-0.1, -0.5, -0.5])
-        self.v_min_bound = np.array(self.get_parameter("v_min").get_parameter_value().double_array_value)
-        assert np.all(self.v_max_bound > 0) and np.all(self.v_min_bound <= 0)
-        # Cost matrices
-        self.declare_parameter("Q", [1., 0., 0., 0., 1., 0., 0., 0., 0.1])  # State cost
-        self.Q = np.array(self.get_parameter("Q").get_parameter_value().double_array_value).reshape(self.n, self.n)
-        self.declare_parameter("Qf", [10., 0., 0., 0., 10., 0., 0., 0., 10.])  # Terminal Cost
-        self.Qf = np.array(self.get_parameter("Qf").get_parameter_value().double_array_value).reshape(self.n, self.n)
-        self.declare_parameter("R", [0.1, 0., 0., 0., 0.1, 0., 0., 0., 0.1])  # Temporal weights on state cost
-        self.R = np.array(self.get_parameter("R").get_parameter_value().double_array_value).reshape(self.m, self.m)
-        self.declare_parameter("Q_schedule", np.linspace(0, 1,
-                                                         self.N).tolist())  # Schedule on state cost (allow more deviation of trajectory from plan near beginning)
-        self.Q_sched = np.array(self.get_parameter("Q_schedule").get_parameter_value().double_array_value)
-        self.declare_parameter("Rv_first", [0., 0., 0., 0., 0., 0., 0., 0., 0.])  # First order rate penalty on input
-        self.Rv_first = np.array(self.get_parameter("Rv_first").get_parameter_value().double_array_value).reshape(
-            self.n, self.n)
-        self.declare_parameter("Rv_second", [0., 0., 0., 0., 0., 0., 0., 0., 0.])  # Second order rate penalty on input
-        self.Rv_second = np.array(self.get_parameter("Rv_second").get_parameter_value().double_array_value).reshape(
-            self.n, self.n)
+        self.declare_parameter("v_max_dyn", [0.2, 0.2, 0.2])
+        self.v_max_dyn = np.array(self.get_parameter("v_max_dyn").get_parameter_value().double_array_value)
+        self.declare_parameter("v_min_dyn", [-0.1, -0.2, -0.2])
+        self.v_min_dyn = np.array(self.get_parameter("v_min_dyn").get_parameter_value().double_array_value)
+        assert np.all(self.v_max_dyn > 0) and np.all(self.v_min_dyn <= 0)
 
-        # Declare subscriber to velocity commands
+        self.declare_parameter("v_max_map", [0.5, 0.5, 0.5])
+        self.v_max_map = np.array(self.get_parameter("v_max_map").get_parameter_value().double_array_value)
+        self.declare_parameter("v_min_map", [-0.1, -0.5, -0.5])
+        self.v_min_map = np.array(self.get_parameter("v_min_map").get_parameter_value().double_array_value)
+        assert np.all(self.v_max_map > 0) and np.all(self.v_min_map <= 0)
+
+        self.goal_pose = np.zeros((3,))
+        self.received_goal = False
+        self.received_curr = False
+
+        # TODO: get initial map
+        # Declare subscriber to pose commands
         self.register_obk_subscription(
-            "sub_plan_setting",
-            self.plan_callback,  # type: ignore
-            key="sub_plan_key",  # key can be specified here or in the config file
-            msg_type=Trajectory
+            "sub_goal_setting",
+            self.goal_callback,  # type: ignore
+            key="sub_goal_key",  # key can be specified here or in the config file
+            msg_type=Pose2D
         )
         self.register_obk_subscription(
-            "sub_vel_lim_setting",
-            self.vel_lim_callback,  # type: ignore
-            key="sub_vel_lim_key",  # key can be specified here or in the config file
+            "sub_map_setting",
+            self.map_update_callback,  # type: ignore
+            key="sub_map_key",  # key can be specified here or in the config file
+            msg_type=OccupancyGridUpdate
+        )
+        self.register_obk_publisher(
+            "pub_vel_lim_setting",
+            key="pub_vel_lim_key",  # key can be specified here or in the config file
             msg_type=VelocityCommand
         )
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Configure the controller."""
-        # TODO: DEBUGGIN
-        # super().on_configure(state)
-        self.n = 3
-        self.m = 3
-        self.px_z = np.zeros((3,))
-        self.px_v = np.zeros((3,))
-        self.z_ref = np.zeros((self.n, self.N + 1))
-        self.v_ref = np.zeros((self.m, self.N))
-
-        self.v_max = self.v_max_bound
-        self.v_min = self.v_min_bound
-
-        self.recieved_path = False
-
-        setup_parameterized_ocp(
-            self.N, self.n, self.m, self.Q, self.R, self.Qf, self.Q_sched, self.Rv_first, self.Rv_second
-        )
+        super().on_configure(state)
 
         return TransitionCallbackReturn.SUCCESS
 
@@ -125,30 +94,19 @@ class DynamicTubeMPCNode(ObeliskController):
                 x_hat_msg.q_base[1],  # y
                 self.quat2yaw(x_hat_msg.q_base[3:])  # theta
             ])
+            self.received_curr = True
         else:
             self.get_logger().error(
                 f"Estimated State base pose size does not match URDF! Size is {len(x_hat_msg.q_base)} instead of 7.")
 
-        if len(x_hat_msg.v_base) == 6:
-            self.px_v = np.array([
-                x_hat_msg.v_base[0],  # v_x
-                x_hat_msg.v_base[1],  # v_y
-                x_hat_msg.v_base[-1]  # w_z
-            ])
-        else:
-            self.get_logger().error(
-                f"Estimated State base velocity size does not match URDF! Size is {len(x_hat_msg.v_base)} instead of 6.")
-
-    def plan_callback(self, plan_msg: Trajectory):
+    def goal_callback(self, goal_msg: Pose2D):
         # Accepts a trajectory which is a sequence of waypoints
-        self.plan = np.array(plan_msg.z).reshape(plan_msg.horizon + 1, plan_msg.n)
-        self.recieved_path = True
+        self.goal_pose = np.array([goal_msg.x, goal_msg.y, goal_msg.theta])
+        self.received_goal = True
 
-    def vel_lim_callback(self, v_max_msg: VelocityCommand):
-        """Sets the upper bound on velocity limits for the planner"""
-        prop_v_lim = np.clip(np.array(v_max_msg.v_x, v_max_msg.v_y, v_max_msg.w_z), 0, 1)
-        self.v_max = prop_v_lim * self.v_max_bound
-        self.v_min = prop_v_lim * self.v_min_bound
+    def map_update_callback(self, map_update_msg: OccupancyGridUpdate):
+        # TODO: update the map of the explorer
+        pass
 
     @staticmethod
     def quat2yaw(quat):
@@ -158,7 +116,7 @@ class DynamicTubeMPCNode(ObeliskController):
         qw = quat[3]
         siny_cosp = 2.0 * (qw * qz + qx * qy)
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-        yaw = torch.atan2(siny_cosp, cosy_cosp)
+        yaw = np.atan2(siny_cosp, cosy_cosp)
         return yaw
 
     def compute_control(self) -> Trajectory:
@@ -168,37 +126,26 @@ class DynamicTubeMPCNode(ObeliskController):
             obelisk_control_msg: The control message.
         """
         # Don't plan if we haven't received a path to follow
-        if not self.recieved_path:
+        if not self.received_goal or not self.received_curr:
             return
+        path, cost, frontiers = self.explorer.find_frontiers_to_goal(self.curr_pose, self.goal_pose)
 
-        z, v = self.solve_dtmpc()
+        # TODO: decide whether to follow path in Dynamic or Mapping mode
 
-        # setting the message
+        # setting the message (geometric only path)
+        # TODO: should add desired orientation, at least at goal...
         traj_msg = Trajectory()
         traj_msg.header.stamp = self.get_clock().now().to_msg()
-        traj_msg.z = z.tolist()
-        traj_msg.v = v.tolist()
-        traj_msg.t = self.ts.tolist()
+        traj_msg.z = path
 
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
         assert is_in_bound(type(traj_msg), ObeliskControlMsg)
         return traj_msg
 
-    def solve_dtmpc(self):
-        # TODO: solve DTMPC
-        # Compute z_ref, v_ref from path
-
-        # Linearize obstacle constraints
-
-        # Take a few steps on SQP
-        z = ...
-        v = ...
-        return z, v
-
 
 def main(args: Optional[List] = None) -> None:
     """Main entrypoint."""
-    spin_obelisk(args, DynamicTubeMPCNode, SingleThreadedExecutor)
+    spin_obelisk(args, HighLevelPlannerNode, SingleThreadedExecutor)
 
 
 if __name__ == "__main__":
