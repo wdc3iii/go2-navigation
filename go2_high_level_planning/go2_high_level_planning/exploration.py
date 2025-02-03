@@ -129,7 +129,7 @@ class Frontier:
                             print("Warning: frontier depth limit exceeded")
                         # Add the list of frontier nodes to the frontiers list.
                         if len(frontier) >= self.min_frontier_size:
-                            frontiers.append(frontier)
+                            frontiers.append((frontier, cost_to_node))  # Use cost to reach this node as rough approx for cost to reach frontier
         if nodes_expanded >= self.astar_depth_limit:
             print("Warning: A* search depth limit exceeded")
         if path_to_goal is None:
@@ -141,24 +141,20 @@ class Frontier:
 
     def select_intermediate_goal(self, frontiers, start_node, goal_node):
         min_front_score = np.inf
-        min_front_path = None
-        min_front_cost = None
+        min_front = None
 
-        for front in frontiers:
+        for front, cost_to_front in frontiers:
             front_size = len(front)
-
-            front_pose = self.choose_frontier_pose(front)
-            front_to_goal = self.heuristic(front_pose, goal_node)
-            path_to_front, start_to_front = self.find_frontiers_to_goal(start_node, front_pose, find_frontiers=False)
+            front_to_goal = self.heuristic(np.mean(np.array(front), axis=0), goal_node)
 
             front_score = self.front_size_weight * front_size \
                           + self.front_to_goal_weight * front_to_goal \
-                          + self.start_to_front_weight * start_to_front
+                          + self.start_to_front_weight * cost_to_front
             if front_score < min_front_score:
                 min_front_score = front_score
-                min_front_path = path_to_front
-                min_front_cost = start_to_front
-        return min_front_path, min_front_cost
+                min_front = front
+        min_front_pose = self.choose_frontier_pose(min_front)
+        return self.find_frontiers_to_goal(start_node, min_front_pose, find_frontiers=False)
 
     def choose_frontier_pose(self, front):
         # TODO: choose pose in a more useful way

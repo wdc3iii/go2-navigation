@@ -49,7 +49,7 @@ def plot_maze(maze, path, last_path, frontiers):
         y = np.array([n[1] for n in last_path])
         plt.plot(x, y, '--b')
     if frontiers is not None:
-        for front in frontiers:
+        for front, _ in frontiers:
             x = np.array([n[0] for n in front])
             y = np.array([n[1] for n in front])
             plt.plot(x, y, 'g.')
@@ -57,7 +57,7 @@ def plot_maze(maze, path, last_path, frontiers):
 
 if __name__ == '__main__':
     # Generate and plot the maze
-    maze_width, maze_height = 21, 21  # Odd dimensions for proper maze generation
+    maze_width, maze_height = 51, 51  # Odd dimensions for proper maze generation
     scale = 4
     sensing_range = 10
     occ_grid_gt = generate_maze(maze_width, maze_height)
@@ -74,6 +74,7 @@ if __name__ == '__main__':
                     start = (r, c)
                 goal = (r, c)
 
+    total_path = []
     last_path = None
     path = None
     solved = False
@@ -93,6 +94,7 @@ if __name__ == '__main__':
         front.update_map(occ_grid_gt[r_l:r_u, c_l:c_u], (r_l, c_l))
         # Plan
         path, cost, frontiers = front.find_frontiers_to_goal(curr_state, goal)
+        print(cost, time.perf_counter() - t1)
 
         # Display the maze
         if display:
@@ -101,8 +103,7 @@ if __name__ == '__main__':
         curr_state = path[-1]
         if path[-1] == goal:
             solved = True
+        total_path.extend(path)
 
-        print(cost, time.perf_counter() - t1)
-
-        # time.sleep(1)
     print(time.perf_counter() - t0)
+    plot_maze(front.map, total_path, None, None)
