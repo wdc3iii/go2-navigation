@@ -3,11 +3,17 @@ import matplotlib.pyplot as plt
 import random
 from go2_high_level_planning.exploration import Frontier
 from scipy.ndimage import zoom
+import time
 
+FREE = 0
+UNCERTAIN = 1
+OCCUPIED = 2
+
+display = True
 
 def generate_maze(width, height):
     """Generate a maze using recursive backtracking algorithm."""
-    maze = np.ones((height, width), dtype=int) * Frontier.OCCUPIED
+    maze = np.ones((height, width), dtype=int) * 2
 
     def carve_passages_from(x, y):
         """Recursive function to carve the maze."""
@@ -17,14 +23,14 @@ def generate_maze(width, height):
         for dx, dy in directions:
             nx, ny = x + dx, y + dy
 
-            if 0 < nx < width-1 and 0 < ny < height-1 and maze[ny, nx] == Frontier.OCCUPIED:
-                maze[y + dy // 2, x + dx // 2] = Frontier.FREE  # Remove wall
-                maze[ny, nx] = Frontier.FREE  # Mark passage
+            if 0 < nx < width-1 and 0 < ny < height-1 and maze[ny, nx] == OCCUPIED:
+                maze[y + dy // 2, x + dx // 2] = FREE  # Remove wall
+                maze[ny, nx] = FREE  # Mark passage
                 carve_passages_from(nx, ny)
 
     # Start at a random point in the maze
     start_x, start_y = (random.randrange(1, width, 2), random.randrange(1, height, 2))
-    maze[start_y, start_x] = 0
+    maze[start_y, start_x] = FREE
     carve_passages_from(start_x, start_y)
 
     return maze
@@ -41,7 +47,7 @@ def plot_maze(maze, path, last_path, frontiers):
     if last_path is not None:
         x = np.array([n[0] for n in last_path])
         y = np.array([n[1] for n in last_path])
-        plt.plot(x, y, '--r')
+        plt.plot(x, y, '--b')
     if frontiers is not None:
         for front in frontiers:
             x = np.array([n[0] for n in front])
@@ -57,13 +63,13 @@ if __name__ == '__main__':
     occ_grid_gt = generate_maze(maze_width, maze_height)
 
     occ_grid_gt = zoom(occ_grid_gt, scale, order=0)
-    front = Frontier()
-    front.update_map(np.ones_like(occ_grid_gt) * Frontier.UNCERTAIN, (0, 0))
+    front = Frontier(2, free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED)
+    front.update_map(np.ones_like(occ_grid_gt), (0, 0))
     start = None
     goal = None
     for r in range(maze_height * scale):
         for c in range(maze_width * scale):
-            if occ_grid_gt[r][c] == Frontier.FREE:
+            if occ_grid_gt[r][c] == FREE:
                 if start is None:
                     start = (r, c)
                 goal = (r, c)
@@ -73,26 +79,30 @@ if __name__ == '__main__':
     solved = False
     curr_state = start
     plot_maze(occ_grid_gt, [start], [goal], None)
+
+    t0 = time.perf_counter()
     while not solved:
         last_path = path
-
         # Sense
         r_l = max(curr_state[0] - sensing_range, 0)
-        r_u = min(curr_state[0] + sensing_range, maze_height * scale - 1)
+        r_u = min(curr_state[0] + sensing_range, maze_height * scale)
         c_l = max(curr_state[1] - sensing_range, 0)
-        c_u = min(curr_state[1] + sensing_range, maze_height * scale - 1)
-        front.update_map(occ_grid_gt[r_l:r_u, c_l:c_u], (r_l, c_l))
+        c_u = min(curr_state[1] + sensing_range, maze_height * scale)
 
+        t1 = time.perf_counter()
+        front.update_map(occ_grid_gt[r_l:r_u, c_l:c_u], (r_l, c_l))
         # Plan
-        path, frontiers = front.find_frontiers_to_goal(curr_state, goal)
+        path, cost, frontiers = front.find_frontiers_to_goal(curr_state, goal)
 
         # Display the maze
-        plot_maze(front.map, path, last_path, frontiers)
+        if display:
+            plot_maze(front.map, path, last_path, frontiers)
 
         curr_state = path[-1]
         if path[-1] == goal:
             solved = True
 
-    # Return the occupancy grid
-    occ_grid_gt
+        print(cost, time.perf_counter() - t1)
 
+        # time.sleep(1)
+    print(time.perf_counter() - t0)
