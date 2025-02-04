@@ -7,8 +7,8 @@ from scipy.interpolate import interp1d
 class DynamicTubeMPC:
     
     def __init__(self, dt, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max,
-            free=0, uncertain=1, occupied=2, partial_map_update_frac=0.25,
-            obs_rho=10, obs_constraint_method="QuadraticPenalty", fix_internal_constraints=True):
+            robot_radius=0, free=0, uncertain=1, occupied=2, partial_map_update_frac=0.25,
+            obs_rho=10, obs_constraint_method="QuadraticPenalty", fix_internal_constraints=False):
         # Dimensions
         self.N = N
         self.n = n
@@ -16,11 +16,13 @@ class DynamicTubeMPC:
         self.dt = dt
 
         # Cost function parameters
-        self.Q = Q
-        self.Qf = Qf
-        self.R = R
-        self.Rv_f = Rv_f
-        self.Rv_s = Rv_s
+        self.Q = np.diag(Q[:2])
+        self.Q_heading = Q[-1]
+        self.Qf = np.diag(Qf[:2])
+        self.Qf_heading = Qf[-1]
+        self.R = np.diag(R)
+        self.Rv_f = np.diag(Rv_f)
+        self.Rv_s = np.diag(Rv_s)
         self.Q_sched = Q_sched
 
         # Input bounds
@@ -47,6 +49,7 @@ class DynamicTubeMPC:
         # Constraint parameters
         self.obs_rho = obs_rho
         self.obs_constraint_method = obs_constraint_method
+        self.robot_radius = robot_radius
         assert self.obs_constraint_method in ["Constraint", "QuadraticPenalty", "LinearPenalty"]
 
         # Map / scan
@@ -152,6 +155,8 @@ class DynamicTubeMPC:
         return params
 
     def compute_constraints(self):
+        # Constraint buffer, size of voxel + robot radius
+        constraint_buffer =  - np.sqrt(2) * self.map.resolution / 2 - self.robot_radius
         # First, find the closest obstacles to each point along warm start
         nearest_map_points, nearest_map_dists = self.get_nearest_map_points()  # Map
         nearest_scan_points, nearest_scan_dists = self.get_nearest_scan_points()  # Scan
@@ -159,11 +164,12 @@ class DynamicTubeMPC:
         # Combine map and scan
         use_scan = nearest_scan_dists < nearest_map_dists
         nearest_points = np.where(use_scan[:, None], nearest_scan_points, nearest_map_points)
+        # TODO: Filter normals with adjacent occupancy information?
         normals = self.z_warm[:, :2] - nearest_points
 
-        # Compute normals TODO: option for reverse computation if point inside obstacle
+        # Compute normals
         A = normals / np.linalg.norm(normals, axis=1, keepdims=True)
-        b = - np.sum(A * nearest_points, axis=1) - (np.sqrt(2) + 0.5) * self.map.resolution
+        b = -np.sum(A * nearest_points, axis=1) + constraint_buffer
 
         if self.fix_internal_constraints:
             invalid_nodes = self.map[self.map.pose_to_map(self.z_warm)] != self.map.FREE
@@ -174,24 +180,33 @@ class DynamicTubeMPC:
                 use_scan_inv = nearest_scan_dists_inv < nearest_map_dists_inv
                 nearest_points_inv = np.where(use_scan_inv[:, None], nearest_scan_points_inv, nearest_map_points_inv)
                 normals = self.z_warm[invalid_nodes, :2] - nearest_points_inv
-
-                # Compute normals TODO: option for reverse computation if point inside obstacle
+                # Compute normals
                 A[invalid_nodes, :] = -normals / np.linalg.norm(normals, axis=1, keepdims=True)
-                b[invalid_nodes] = - np.sum(A[invalid_nodes, :] * nearest_points_inv, axis=1) - (np.sqrt(2) + 0.5) * self.map.resolution
-        import matplotlib.pyplot as plt
-        d = 0.1
-        fig, ax = plt.subplots()
-        self.map.plot(ax=ax)
-        ax.plot(self.z_ref[:, 0] / self.map.resolution, self.z_ref[:, 1] / self.map.resolution, '.-b')
-        for i in range(21):
-            plt.plot(nearest_points[i, 0] / self.map.resolution, nearest_points[i, 1] / self.map.resolution, '.g')
-            a0 = A[i, :]
-            b0 = b[i]
-            q = nearest_points[i, 0]
-            c = abs(d / 2 * a0[1] / np.linalg.norm(a0))
-            x = np.linspace(q - c, q + c)
-            plt.plot(x / self.map.resolution, -(a0[0] * x + b0) / a0[1] / self.map.resolution, 'r')
-        plt.show()
+                b[invalid_nodes] = -np.sum(A[invalid_nodes, :] * nearest_points_inv, axis=1) + constraint_buffer
+        # import matplotlib.pyplot as plt
+        # d = 0.2
+        # yel = np.array([0.9290, 0.6940, 0.1250])
+        # pur = np.array([0.4940, 0.1840, 0.5560])
+        # fig, ax = plt.subplots()
+        # self.map.plot(ax=ax)
+        # ax.plot(self.z_ref[:, 0] / self.map.resolution, self.z_ref[:, 1] / self.map.resolution, '.-r')
+        # ax.plot(self.z_warm[:, 0] / self.map.resolution, self.z_warm[:, 1] / self.map.resolution, '.-b')
+        # for i in range(21):
+        #     plt.plot(nearest_points[i, 0] / self.map.resolution, nearest_points[i, 1] / self.map.resolution, '.g')
+        #     a0 = A[i, :]
+        #     b0 = b[i]
+        #     print(np.inner(a0, nearest_points[i, :]) + b0)
+        #     if abs(a0[1]) > 0.4:
+        #         q = nearest_points[i, 0]
+        #         c = abs(d / 2 * a0[1] / np.linalg.norm(a0))
+        #         x = np.linspace(q - c, q + c)
+        #         plt.plot(x / self.map.resolution, -(a0[0] * x + b0) / a0[1] / self.map.resolution, c=yel * (i / 20) + pur * (20 - i) / 20)
+        #     else:
+        #         q = nearest_points[i, 1]
+        #         c = abs(d / 2 * a0[0] / np.linalg.norm(a0))
+        #         y = np.linspace(q - c, q + c)
+        #         plt.plot(-(a0[1] * y + b0) / a0[0] / self.map.resolution, y / self.map.resolution, c=yel * (i / 20) + pur * (20 - i) / 20)
+        # plt.show()
         return A, b
 
     @staticmethod
@@ -243,6 +258,21 @@ class DynamicTubeMPC:
             else:
                 dist = x - ca.repmat(goal, x.shape[0], 1)
         obj = ca.sum2((dist @ Q) * dist)
+        if t_sched is not None:
+            obj *= t_sched
+        return ca.sum1(obj)
+
+    @staticmethod
+    def geo_cost(x, Q, goal=None, t_sched=None):
+        if goal is None:
+            dist = x
+        else:
+            if goal.shape == x.shape:
+                dist = x - goal
+            else:
+                dist = x - ca.repmat(goal, x.shape[0], 1)
+
+        obj = Q * (ca.sin(dist) * ca.sin(dist) + (1 - ca.cos(dist)) * (1 - ca.cos(dist)))
         if t_sched is not None:
             obj *= t_sched
         return ca.sum1(obj)
@@ -325,10 +355,11 @@ class DynamicTubeMPC:
 
         # Define cost function
         # Reference Tracking
-        # TODO: Geometrically consistent heading cost
-        self.obj = self.quadratic_objective(z[:-1, :], self.Q, goal=p_z_ref[:-1, :], t_sched=self.Q_sched) \
+        self.obj = self.quadratic_objective(z[:-1, :2], self.Q, goal=p_z_ref[:-1, :2], t_sched=self.Q_sched) \
+              + self.geo_cost(z[:-1, 2], self.Q_heading, goal=p_z_ref[:-1, 2], t_sched=self.Q_sched) \
               + self.quadratic_objective(v, self.R, goal=p_v_ref) \
-              + self.quadratic_objective(z[-1, :], self.Qf, goal=p_z_ref[-1, :])
+              + self.quadratic_objective(z[-1, :2], self.Qf, goal=p_z_ref[-1, :2]) \
+              + self.geo_cost(z[-1, 2], self.Qf_heading, goal=p_z_ref[-1, 2])
 
         # Smoothness of input
         # First order difference

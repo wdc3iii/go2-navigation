@@ -106,6 +106,8 @@ class HighLevelPlannerNode(ObeliskController):
 
     def map_update_callback(self, map_update_msg: OccupancyGridUpdate):
         # TODO: update the map of the explorer
+
+        # TODO: Dilate obstacles by robot radius
         pass
 
     @staticmethod
