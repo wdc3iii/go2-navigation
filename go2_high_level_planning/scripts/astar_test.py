@@ -9,7 +9,7 @@ FREE = 0
 UNCERTAIN = 1
 OCCUPIED = 2
 
-display = True
+display = False
 
 def generate_maze(width, height):
     """Generate a maze using recursive backtracking algorithm."""

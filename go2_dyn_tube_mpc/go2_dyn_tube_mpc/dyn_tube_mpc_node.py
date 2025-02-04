@@ -13,7 +13,6 @@ from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
-import casadi as ca
 import torch
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
 

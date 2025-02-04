@@ -1,18 +1,19 @@
 import numpy as np
 import casadi as ca
-from scipy.ndimage import distance_transform_edt
 from scipy.spatial import KDTree
-
+from go2_dyn_tube_mpc.map_utils import MapUtils
+from scipy.interpolate import interp1d
 
 class DynamicTubeMPC:
     
-    def __init__(self, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched,
+    def __init__(self, dt, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max,
             free=0, uncertain=1, occupied=2, partial_map_update_frac=0.25,
             obs_rho=10, obs_constraint_method="QuadraticPenalty"):
         # Dimensions
         self.N = N
         self.n = n
         self.m = m
+        self.dt = dt
 
         # Cost function parameters
         self.Q = Q
@@ -23,12 +24,18 @@ class DynamicTubeMPC:
         self.Q_sched = Q_sched
 
         # Input bounds
+        self.v_max_bound = v_max
         self.v_max = np.zeros((m,))
+        self.v_min_bound = v_min
         self.v_min = np.zeros((m,))
 
         # Reference Trajectory
+        self.path = None
+        self.path_length = None
+        self.ref_length = np.arange(self.N + 1) * self.v_max_bound[0] * dt
         self.z_ref = np.zeros((N + 1, n))
         self.v_ref = np.zeros((N, m))
+        self.v_ref[:, 0] = self.v_max_bound[0]
 
         # Initial condition
         self.z0 = np.zeros((n,))
@@ -43,15 +50,12 @@ class DynamicTubeMPC:
         assert self.obs_constraint_method in ["Constraint", "QuadraticPenalty", "LinearPenalty"]
 
         # Map / scan
-        self.map = None
+        self.map = MapUtils(free=free, uncertain=uncertain, occupied=occupied)
         self.cell_dim = np.array([1., 1.])
         self.map_origin = np.zeros((2,))
         self.map_dist_transform = None
         self.map_nearest_inds = None
         self.scan = None
-        self.FREE = free
-        self.UNCERTAIN = uncertain
-        self.OCCUPIED = occupied
         self.partial_map_update_frac = partial_map_update_frac
 
         # Casadi variables
@@ -81,13 +85,13 @@ class DynamicTubeMPC:
 
     def set_input_bounds(self, v_min, v_max):
         assert v_min.shape == self.v_min.shape and v_max.shape == self.v_max.shape
-        self.v_min = v_min
-        self.v_max = v_max
+        self.v_min = np.clip(v_min, self.v_min_bound, np.zeros((3,)))
+        self.v_max = np.clip(v_max, np.zeros((3,)), self.v_max_bound)
 
-    def set_reference(self, z_ref, v_ref):
-        assert z_ref.shape == self.z_ref.shape and v_ref.shape == self.v_ref.shape
-        self.z_ref = z_ref
-        self.v_ref = v_ref
+    def set_path(self, path):
+        self.path = self.map.map_to_pose(path)
+        distances = np.linalg.norm(np.diff(self.path, axis=0), axis=1)
+        self.path_length = np.insert(np.cumsum(distances), 0, 0)
 
     def set_initial_condition(self, z0):
         assert z0.shape == self.z0.shape
@@ -98,27 +102,22 @@ class DynamicTubeMPC:
         self.z_warm = z_warm
         self.v_warm = v_warm
 
-    def update_map(self, map_update, origin):
-        # TODO: include map cell dimensions and map origin here
-        if self.map is None:
-            # instantiate the map
-            self.map = map_update
-            self.map_dist_transform, self.map_nearest_inds = distance_transform_edt(self.map == self.FREE, return_indices=True)
-        else:
-            # Update the map
-            self.map[origin[0]:origin[0] + map_update.shape[0], origin[1]:origin[1] + map_update.shape[1]] = map_update
-
-            if map_update.numel() < self.partial_map_update_frac * self.map.numel():
-                # perform a partial update
-                # TODO: implement partial updates for closest points on map
-                raise NotImplementedError()
-            else:
-                self.map_dist_transform, self.map_nearest_inds = distance_transform_edt(
-                    self.map == self.FREE, return_indices=True
-                )
+    def reset_warm_start(self):
+        self.compute_reference()
+        self.z_warm = self.z_ref.copy()
+        self.v_warm = self.v_ref.copy()
 
     def update_scan(self, scan_points):
         self.scan = scan_points
+
+    def set_map(self, occ_grid, origin, resolution):
+        self.map.set_map(occ_grid, origin, resolution)
+        self.path_length = np.arange(self.N + 1) * resolution
+        self.compute_nearest_map_points()
+
+    def update_map(self, map_update, origin):
+        # TODO: update map
+        self.compute_nearest_map_points()
 
     def lbx(self):
         v_lb = ca.DM(np.repeat(self.v_min[:, None], self.N, 0))
@@ -135,28 +134,60 @@ class DynamicTubeMPC:
         )
 
     def init_params(self):
-        # First, find closest obstacles to each point along warm start
-        # Map
-        nearest_map_points, nearest_map_dists = self.get_nearest_map_points()
-        # Scan
-        nearest_scan_points, nearest_scan_dists = self.get_nearest_scan_points()
+        # Compute constraints
+        A, b = self.compute_constraints()
+        # Compute reference
+        self.compute_reference()
 
-        # Combine map and scan
-        use_scan = nearest_scan_dists < nearest_map_dists
-        nearest_points = np.where(use_scan[:, None], nearest_scan_points, nearest_map_points)
-
-        normals =  self.z_warm - nearest_points
-
-        A = normals / np.linalg.norm(normals, axis=1, keepdims=True)
-        b = - np.sum(A * self.z_warm, axis=1)
+        # Assemble params
         params = np.vstack([
             self.z0[:, None],
             np.reshape(self.z_ref, (-1, 1), order='F'),
             np.reshape(self.v_ref, (-1, 1), order='F'),
             np.reshape(A, (-1, 1), order='F'),
-            b
+            b[:, None]
         ])
         return params
+
+    def compute_constraints(self):
+        # First, find the closest obstacles to each point along warm start
+        nearest_map_points, nearest_map_dists = self.get_nearest_map_points()  # Map
+        nearest_scan_points, nearest_scan_dists = self.get_nearest_scan_points()  # Scan
+
+        # Combine map and scan
+        use_scan = nearest_scan_dists < nearest_map_dists
+        nearest_points = np.where(use_scan[:, None], nearest_scan_points, nearest_map_points)
+        normals = self.z_warm[:, :2] - nearest_points
+
+        # Compute normals TODO: option for reverse computation if point inside obstacle
+        A = normals / np.linalg.norm(normals, axis=1, keepdims=True)
+        b = - np.sum(A * nearest_points, axis=1)
+        return A, b
+
+    @staticmethod
+    def smooth_heading(v):
+        pad = 5  # odd
+        kernel = np.ones(pad) / pad
+        return np.convolve(np.pad(v, pad_width=pad//2, mode='edge'), kernel, 'valid')
+
+    def compute_reference(self):
+        # Compute reference
+        init_ind = np.argmin(np.linalg.norm(self.path - self.z0[:2], axis=1))
+        path_length = self.path_length[init_ind:] - self.path_length[init_ind]
+        interp_x = interp1d(path_length, self.path[init_ind:, 0],
+            kind='linear', fill_value=(self.path[0, 0], self.path[-1, 0]),
+            bounds_error=False, assume_sorted=True)(self.ref_length)
+        interp_y = interp1d(path_length, self.path[init_ind:, 1],
+            kind='linear', fill_value=(self.path[0, 1], self.path[-1, 1]),
+            bounds_error=False, assume_sorted=True)(self.ref_length)
+        diff_y = np.diff(interp_y)
+        diff_x = np.diff(interp_x)
+        headings = np.arctan2(diff_y, diff_x)
+
+        self.z_ref = np.hstack([interp_x[:, None], interp_y[:, None], np.insert(headings, -1, headings[-1])[:, None]])
+        self.z_ref[:, -1] = self.smooth_heading(self.z_ref[:, -1])
+        self.v_ref[:, -1] = np.clip(np.diff(self.z_ref[:, -1]) / self.dt, self.v_min_bound[-1], self.v_max_bound[-1])
+        self.v_ref[np.logical_and(diff_x == 0, diff_y == 0)] = 0
 
     def init_decision_var(self):
         x_init = np.vstack([
@@ -186,12 +217,11 @@ class DynamicTubeMPC:
             obj *= t_sched
         return ca.sum1(obj)
 
-    @staticmethod
-    def lateral_unicycle_dynamics(z, v):
+    def lateral_unicycle_dynamics(self, z, v):
         gv_0 = v[0] * ca.cos(z[2]) - v[1] * ca.sin(z[2])
         gv_1 = v[0] * ca.sin(z[2]) + v[1] * ca.cos(z[2])
         gv_2 = v[2]
-        return z + ca.vertcat(gv_0, gv_1, gv_2)
+        return z + ca.vertcat(gv_0, gv_1, gv_2) * self.dt
 
     def dynamics_constraints(self, z, v):
         g_dyn = []
@@ -208,13 +238,14 @@ class DynamicTubeMPC:
         dist = z - z0
         return dist, ca.DM(*dist.shape), ca.DM(*dist.shape)
 
-    def get_nearest_map_points(self):
-        vox_traj = self.voxelize(self.z_warm[:, :2])
-        # nearest_x = self.map_nearest_inds[0, vox_traj[:, 0], vox_traj[:, 1]]
-        # nearest_y = self.map_nearest_inds[1, vox_traj[:, 0], vox_traj[:, 1]]
-        # nearest_points = np.stack([nearest_x, nearest_y], axis=1)
+    def compute_nearest_map_points(self):
+        self.map_nearest_inds = self.map.get_nearest_inds()
 
-        nearest_points = self.map_nearest_inds[:, vox_traj[:, 0], vox_traj[:, 1]]
+    def get_nearest_map_points(self):
+        warm_x, warm_y = self.map.pose_to_map(self.z_warm)
+
+        nearest_points = self.map_nearest_inds[:, warm_x, warm_y].T
+        nearest_points = self.map.map_to_pose(nearest_points)
         dists = np.linalg.norm(nearest_points - self.z_warm[:, :2], axis=1)
         return nearest_points, dists
 
@@ -225,14 +256,8 @@ class DynamicTubeMPC:
         dists, inds = tree.query(self.z_warm[:, :2])  # Find nearest neighbor indices
         return self.scan[inds], dists
 
-    def voxelize(self, traj):
-        return np.floor((traj - self.map_origin) / self.cell_dim).astype(int)
-
     def set_map_origin(self, map_origin):
-        self.map_origin = map_origin
-
-    def set_cell_dim(self, cell_width, cell_height):
-        self.cell_dim = np.array([cell_width, cell_height])
+        self.map.set_origin(map_origin)
 
     def setup_ocp(self):
         self.z_lb = ca.DM(self.N + 1, self.n)
@@ -242,7 +267,7 @@ class DynamicTubeMPC:
 
         # State variables
         p = ca.MX.sym("p", self.N + 1, self.n - 1)
-        theta = ca.MX.sym("theta", self.N, 1)
+        theta = ca.MX.sym("theta", self.N + 1, 1)
         z = ca.horzcat(p, theta)
         v = ca.MX.sym("v", self.N, self.m)
 
@@ -252,13 +277,14 @@ class DynamicTubeMPC:
 
         # Obstacle normals
         p_A = ca.MX.sym("p_A", self.N + 1, self.n - 1)
-        p_b = ca.MX.sym("p_b", self.N, 1)
+        p_b = ca.MX.sym("p_b", self.N + 1, 1)
 
         # Initial condition parameter
         p_z0 = ca.MX.sym("p_z0", 1, self.n)  # Initial projection Pz(x0) state
 
         # Define cost function
         # Reference Tracking
+        # TODO: Geometrically consistent heading cost
         self.obj = self.quadratic_objective(z[:-1, :], self.Q, goal=p_z_ref[:-1, :], t_sched=self.Q_sched) \
               + self.quadratic_objective(v, self.R, goal=p_v_ref) \
               + self.quadratic_objective(z[-1, :], self.Qf, goal=p_z_ref[-1, :])
@@ -289,20 +315,19 @@ class DynamicTubeMPC:
             g_ub_obs[:] = ca.inf
 
             # Create constraints
-            g = ca.horzcat(g_dyn, g_ic, g_obs)
-            g_lb = ca.horzcat(g_dyn_lb, g_lb_ic, g_lb_obs)
-            g_ub = ca.horzcat(g_dyn_ub, g_ub_ic, g_ub_obs)
+            g = ca.horzcat(g_dyn, g_ic, g_obs.T)
+            g_lb = ca.horzcat(g_dyn_lb, g_lb_ic, g_lb_obs.T)
+            g_ub = ca.horzcat(g_dyn_ub, g_ub_ic, g_ub_obs.T)
         else:
             g = ca.horzcat(g_dyn, g_ic)
             g_lb = ca.horzcat(g_dyn_lb, g_lb_ic)
             g_ub = ca.horzcat(g_dyn_ub, g_ub_ic)
             if self.obs_constraint_method == "QuadraticPenalty":  # quadratic cost method
                 self.obj += self.obs_rho / 2 * ca.sumsqr(ca.fmin(obs_dist, 0))
-            elif self.obs_constraint_method == "Constraint":        # linear cost method
+            elif self.obs_constraint_method == "LinearPenalty":        # linear cost method
                 self.obj += self.obs_rho * ca.sum1(ca.fmin(obs_dist, 0))
             else:
                 raise RuntimeError("Unknown obs_constraint_method")
-        # g_tube, g_lb_tube, g_ub_tube = tube_dynamics(z, v, w, e, v_prev)
 
         # Constraint matrices
         self.g = g.T

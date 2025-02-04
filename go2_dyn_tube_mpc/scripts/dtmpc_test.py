@@ -1,7 +1,11 @@
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
 import numpy as np
+import matplotlib.pyplot as plt
+from go2_dyn_tube_mpc.tmp import Exploration
+import time
 
 if __name__ == "__main__":
+    # Create DTMPC
     N = 20
     n = 3
     m = 3
@@ -10,57 +14,92 @@ if __name__ == "__main__":
     v_min = np.array([-0.1, -0.5, -0.5])
     Q = np.array([1., 0., 0., 0., 1., 0., 0., 0., 0.1]).reshape(n, n)
     Qf = np.array([10., 0., 0., 0., 10., 0., 0., 0., 10.]).reshape(n, n)
-    R = np.array([0.1, 0., 0., 0., 0.1, 0., 0., 0., 0.1]).reshape(m, m)
+    R = np.array([0.05, 0., 0., 0., 0.01, 0., 0., 0., 0.01]).reshape(m, m)
     Q_sched = np.linspace(0, 1, N)
     Rv_first = np.array([0., 0., 0., 0., 0., 0., 0., 0., 0.]).reshape(n, n)
     Rv_second = np.array([0., 0., 0., 0., 0., 0., 0., 0., 0.]).reshape(n, n)
 
-    dtmpc = DynamicTubeMPC(N, n, m, Q, Qf, R, Rv_first, Rv_second, Q_sched)
-
-    tt = np.arange(0, N + 1)[:, None] * dt
-    z_ref = np.hstack([
-        np.sin(tt),
-        np.cos(tt),
-        tt 
-    ]) * v_max
-    v_ref = np.hstack([
-        np.ones((N, 1)),
-        np.zeros((N, 1)),
-        np.zeros((N, 1))
-    ]) * v_max
-    z_i = np.array([0., 1., 0.])
-    # z_ref = np.hstack([
-    #     np.arange(0, N + 1)[:, None] * dt,
-    #     np.zeros((N + 1, 1)),
-    #     np.zeros((N + 1, 1))
-    # ]) * v_max
-    # v_ref = np.hstack([
-    #     np.ones((N, 1)),
-    #     np.zeros((N, 1)),
-    #     np.zeros((N, 1))
-    # ]) * v_max
-    # z_i = np.array([0., 0., 0.])
-    z_init = np.zeros_like(z_ref)
-    v_init = np.zeros_like(v_ref)
-
+    dtmpc = DynamicTubeMPC(dt, N, n, m, Q, Qf, R, Rv_first, Rv_second, Q_sched, v_min, v_max, obs_constraint_method="Constraint")
     dtmpc.set_input_bounds(v_min, v_max)
-    dtmpc.set_reference(z_ref, v_ref)
+    # Create problem
+    occ_grid = np.zeros((101, 101))
+    # index map via [y x]
+    occ_grid[20:30, :70] = 2
+    occ_grid[70:80, 21:] = 1
+    scan = np.array([
+        [0.2, 0.1],
+        [0.2, 0.11],
+        [0.2, 0.12],
+        [0.2, 0.13],
+        [0.225, 0.14],
+        [0.25, 0.15],
+        [0.4, 0.65],
+        [0.41, 0.65],
+        [0.42, 0.65],
+        [0.43, 0.65],
+        [0.44, 0.65],
+        [0.45, 0.65],
+        [0.8, 0.9],
+        [0.82, 0.9],
+        [0.84, 0.9],
+        [0.86, 0.9],
+        [0.88, 0.9],
+        [0.9, 0.9],
+    ])
+
+    dtmpc.set_map(occ_grid, np.zeros((3,)), 0.01)
+    dtmpc.update_scan(scan)
+
+    z_i = np.array([0.1, 0.1, 0.])
     dtmpc.set_initial_condition(z_i)
-    dtmpc.set_warm_start(z_init, v_init)
+    z_f = np.array([0.9, 0.9, 0.])
 
-    z_sol, v_sol = dtmpc.solve()
+    # Create graph solve
+    explorer = Exploration(3, free=0, uncertain=1, occupied=2)
+    explorer.set_map(occ_grid, (0, 0), 0.1)
 
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.plot(z_sol)
-    plt.plot(z_ref, '--')
-    plt.legend(['x', 'y', 'yaw', 'xd', 'yd', 'yawd'])
-    plt.show()
+    start = dtmpc.map.pose_to_map(z_i[:2])
+    goal = dtmpc.map.pose_to_map(z_f[:2])
+    path, dist, frontiers = explorer.find_frontiers_to_goal(start, goal)
+    dtmpc.set_path(path)
+    path_t = dtmpc.map.map_to_pose(np.array(path))
 
-    plt.figure()
-    plt.plot(v_sol)
-    plt.plot(v_ref, '--')
-    plt.legend(['vx', 'vy', 'wz', 'vxd', 'vyd', 'wzd'])
-    plt.show()
+    dtmpc.reset_warm_start()
 
-    print('here')
+    for _ in range(75):
+        z_sol, v_sol = dtmpc.solve()
+        _, ax = plt.subplots(1, 2)
+        ax[0].plot(np.arange(dtmpc.N + 1) * dtmpc.dt, z_sol)
+        ax[0].plot(np.arange(dtmpc.N + 1) * dtmpc.dt, dtmpc.z_ref, '--')
+        ax[0].legend(['x', 'y', 'yaw', 'xd', 'yd', 'yawd'])
+
+        ax[1].plot(np.arange(dtmpc.N) * dtmpc.dt, v_sol)
+        ax[1].plot(np.arange(dtmpc.N ) * dtmpc.dt, dtmpc.v_ref, '--')
+        ax[1].legend(['vx', 'vy', 'wz', 'vxd', 'vyd', 'wzd'])
+        plt.show()
+
+        fig, ax = plt.subplots()
+        dtmpc.map.plot(ax=ax)
+        plt.plot(path_t[:, 0] / dtmpc.map.resolution, path_t[:, 1] / dtmpc.map.resolution, 'r')
+        plt.plot(z_sol[:, 0] / dtmpc.map.resolution, z_sol[:, 1] / dtmpc.map.resolution, '.-b')
+        plt.show()
+        dtmpc.set_initial_condition(z_sol[1])
+        time.sleep(0.1)
+
+
+# import matplotlib.pyplot as plt
+# d = 0.1
+# for i in range(21):
+#     fig, ax = plt.subplots()
+#     self.map.plot(ax=ax)
+#     ax.plot(self.z_ref[:, 0] / self.map.resolution, self.z_ref[:, 1] / self.map.resolution, '.-b')
+#     plt.plot(self.z_ref[i, 0] / self.map.resolution, self.z_ref[i, 1] / self.map.resolution, '.r')
+#     plt.plot(nearest_points[i, 0] / self.map.resolution, nearest_points[i, 1] / self.map.resolution, '.g')
+#     a0 = A[i, :]
+#     b0 = b[i]
+#     q = nearest_points[i, 0]
+#     c = abs(d / 2 * a0[1] / np.linalg.norm(a0))
+#     x = np.linspace(q - c, q + c)
+#     plt.plot(x / self.map.resolution, -(a0[0] * x + b0) / a0[1] / self.map.resolution)
+#
+# plt.show()

@@ -1,7 +1,7 @@
 import numpy as np
 import heapq
 import random
-from go2_high_level_planning.map_utils import MapUtils
+from go2_dyn_tube_mpc.map_utils import MapUtils
 
 class Exploration:
 
