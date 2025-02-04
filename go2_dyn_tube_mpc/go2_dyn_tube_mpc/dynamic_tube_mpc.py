@@ -8,7 +8,7 @@ class DynamicTubeMPC:
     
     def __init__(self, dt, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max,
             free=0, uncertain=1, occupied=2, partial_map_update_frac=0.25,
-            obs_rho=10, obs_constraint_method="QuadraticPenalty"):
+            obs_rho=10, obs_constraint_method="QuadraticPenalty", fix_internal_constraints=True):
         # Dimensions
         self.N = N
         self.n = n
@@ -55,8 +55,10 @@ class DynamicTubeMPC:
         self.map_origin = np.zeros((2,))
         self.map_dist_transform = None
         self.map_nearest_inds = None
+        self.map_unc_occ_nearest_inds = None
         self.scan = None
         self.partial_map_update_frac = partial_map_update_frac
+        self.fix_internal_constraints = fix_internal_constraints
 
         # Casadi variables
         self.z_lb = None
@@ -161,7 +163,35 @@ class DynamicTubeMPC:
 
         # Compute normals TODO: option for reverse computation if point inside obstacle
         A = normals / np.linalg.norm(normals, axis=1, keepdims=True)
-        b = - np.sum(A * nearest_points, axis=1)
+        b = - np.sum(A * nearest_points, axis=1) - (np.sqrt(2) + 0.5) * self.map.resolution
+
+        if self.fix_internal_constraints:
+            invalid_nodes = self.map[self.map.pose_to_map(self.z_warm)] != self.map.FREE
+            if np.any(invalid_nodes):
+                nearest_map_points_inv, nearest_map_dists_inv = self.get_nearest_occ_map_points(invalid_nodes)
+                nearest_scan_points_inv = nearest_scan_points[invalid_nodes]
+                nearest_scan_dists_inv = nearest_scan_dists[invalid_nodes]
+                use_scan_inv = nearest_scan_dists_inv < nearest_map_dists_inv
+                nearest_points_inv = np.where(use_scan_inv[:, None], nearest_scan_points_inv, nearest_map_points_inv)
+                normals = self.z_warm[invalid_nodes, :2] - nearest_points_inv
+
+                # Compute normals TODO: option for reverse computation if point inside obstacle
+                A[invalid_nodes, :] = -normals / np.linalg.norm(normals, axis=1, keepdims=True)
+                b[invalid_nodes] = - np.sum(A[invalid_nodes, :] * nearest_points_inv, axis=1) - (np.sqrt(2) + 0.5) * self.map.resolution
+        import matplotlib.pyplot as plt
+        d = 0.1
+        fig, ax = plt.subplots()
+        self.map.plot(ax=ax)
+        ax.plot(self.z_ref[:, 0] / self.map.resolution, self.z_ref[:, 1] / self.map.resolution, '.-b')
+        for i in range(21):
+            plt.plot(nearest_points[i, 0] / self.map.resolution, nearest_points[i, 1] / self.map.resolution, '.g')
+            a0 = A[i, :]
+            b0 = b[i]
+            q = nearest_points[i, 0]
+            c = abs(d / 2 * a0[1] / np.linalg.norm(a0))
+            x = np.linspace(q - c, q + c)
+            plt.plot(x / self.map.resolution, -(a0[0] * x + b0) / a0[1] / self.map.resolution, 'r')
+        plt.show()
         return A, b
 
     @staticmethod
@@ -239,7 +269,10 @@ class DynamicTubeMPC:
         return dist, ca.DM(*dist.shape), ca.DM(*dist.shape)
 
     def compute_nearest_map_points(self):
+        # TODO: local updates to these indices when possible
         self.map_nearest_inds = self.map.get_nearest_inds()
+        if self.fix_internal_constraints:
+            self.map_unc_occ_nearest_inds = self.map.get_nearest_inds(free=False)
 
     def get_nearest_map_points(self):
         warm_x, warm_y = self.map.pose_to_map(self.z_warm)
@@ -247,6 +280,14 @@ class DynamicTubeMPC:
         nearest_points = self.map_nearest_inds[:, warm_x, warm_y].T
         nearest_points = self.map.map_to_pose(nearest_points)
         dists = np.linalg.norm(nearest_points - self.z_warm[:, :2], axis=1)
+        return nearest_points, dists
+
+    def get_nearest_occ_map_points(self, invalid_inds):
+        warm_x, warm_y = self.map.pose_to_map(self.z_warm[invalid_inds])
+
+        nearest_points = self.map_unc_occ_nearest_inds[:, warm_x, warm_y].T
+        nearest_points = self.map.map_to_pose(nearest_points)
+        dists = np.linalg.norm(nearest_points - self.z_warm[invalid_inds, :2], axis=1)
         return nearest_points, dists
 
     def get_nearest_scan_points(self):
