@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import random
-from go2_high_level_planning.exploration import Exploration
+from go2_dyn_tube_mpc.exploration import Exploration
 from scipy.ndimage import zoom
 import time
 
@@ -9,7 +9,7 @@ FREE = 0
 UNCERTAIN = 1
 OCCUPIED = 2
 
-display = False
+display = True
 
 def generate_maze(width, height):
     """Generate a maze using recursive backtracking algorithm."""
@@ -37,22 +37,22 @@ def generate_maze(width, height):
 
 def plot_maze(maze, path, last_path, frontiers):
     """Plot the maze using matplotlib."""
-    plt.figure(figsize=(8, 8))
-    plt.imshow(maze.T, cmap="gray_r", origin="lower")
-    plt.xticks([]), plt.yticks([])  # Hide axis ticks
+    fig, ax = plt.subplots()
+    maze.plot(ax=ax)
+    ax.set_xticks([]), ax.set_yticks([])  # Hide axis ticks
     if path is not None:
         x = np.array([n[0] for n in path])
         y = np.array([n[1] for n in path])
-        plt.plot(x, y, 'r')
+        ax.plot(x, y, 'r')
     if last_path is not None:
         x = np.array([n[0] for n in last_path])
         y = np.array([n[1] for n in last_path])
-        plt.plot(x, y, '--b')
+        ax.plot(x, y, '--b')
     if frontiers is not None:
         for front, _ in frontiers:
             x = np.array([n[0] for n in front])
             y = np.array([n[1] for n in front])
-            plt.plot(x, y, 'g.')
+            ax.plot(x, y, 'g.')
     plt.show()
 
 if __name__ == '__main__':
@@ -64,7 +64,7 @@ if __name__ == '__main__':
 
     occ_grid_gt = zoom(occ_grid_gt, scale, order=0)
     front = Exploration(2, free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED)
-    front.update_map(np.ones_like(occ_grid_gt), (0, 0))
+    front.set_map(np.ones_like(occ_grid_gt), (0, 0), 0.1)
     start = None
     goal = None
     for r in range(maze_height * scale):
@@ -79,7 +79,7 @@ if __name__ == '__main__':
     path = None
     solved = False
     curr_state = start
-    plot_maze(occ_grid_gt, [start], [goal], None)
+    plot_maze(front.map, [start], [goal], None)
 
     t0 = time.perf_counter()
     while not solved:

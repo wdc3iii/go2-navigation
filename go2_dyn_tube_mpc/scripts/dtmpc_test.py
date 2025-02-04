@@ -1,7 +1,7 @@
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
 import numpy as np
 import matplotlib.pyplot as plt
-from go2_dyn_tube_mpc.tmp import Exploration
+from go2_dyn_tube_mpc.exploration import Exploration
 import time
 
 if __name__ == "__main__":

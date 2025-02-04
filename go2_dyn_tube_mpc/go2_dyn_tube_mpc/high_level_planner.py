@@ -11,7 +11,7 @@ from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
-from go2_high_level_planning.exploration import Exploration
+from go2_dyn_tube_mpc.exploration import Exploration
 from geometry_msgs.msg import Pose2D
 from nav_msgs.msg import OccupancyGrid, OccupancyGridUpdate
 

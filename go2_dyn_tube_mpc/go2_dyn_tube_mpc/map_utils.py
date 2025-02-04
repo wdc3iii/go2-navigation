@@ -26,7 +26,10 @@ class MapUtils:
     def __setitem__(self, key, value):
         if isinstance(key, tuple) and len(key) == 2:
             x, y = key
-            self.occ_grid[y, x] = value  # Note: numpy indexing is (row, col)
+            if isinstance(value, np.ndarray):
+                self.occ_grid[y, x] = value.T
+            else:
+                self.occ_grid[y, x] = value  # Note: numpy indexing is (row, col)
         else:
             raise IndexError("Index must be a tuple (x, y)")
 
