@@ -7,8 +7,8 @@ import numpy as np
 from go2_dyn_tube_mpc_msg.msg import Trajectory
 from obelisk_estimator_msgs.msg import EstimatedState
 from obelisk_control_msgs.msg import VelocityCommand
-from go2_nav_msg.msg import NearestPointsMsg
-from nav_msgs.msg import OccupancyGrid, OccupancyGridUpdate
+import tf_transformations
+from grid_map_msgs.msg import GridMap
 from sensor_msgs.msg import LaserScan
 import geometry_msgs.msg
 from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
@@ -44,6 +44,7 @@ class DynamicTubeMPCNode(ObeliskController):
         self.received_path = False
         self.received_map = False
         self.update_entire_map = True
+        self.dtmpc_needs_warm_start_reset = True
         self.laser_to_odom_transform = self.get_identity_transform("odom", "base_link")
 
         # Load policy
@@ -105,7 +106,7 @@ class DynamicTubeMPCNode(ObeliskController):
             "sub_nearest_points_setting",
             self.nearest_points_callback,  # type: ignore
             key="sub_nearest_points_key",  # key can be specified here or in the config file
-            msg_type=NearestPointsMsg
+            msg_type=GridMap
         )
         # Subscriber to laser scan
         self.register_obk_subscription(
@@ -113,13 +114,6 @@ class DynamicTubeMPCNode(ObeliskController):
             self.laser_scan_callback,  # type: ignore
             key="sub_scan_key",  # key can be specified here or in the config file
             msg_type=LaserScan
-        )
-        # Subscribe to /map once (destroy after first call)
-        self.map_subscription = self.create_subscription(
-            OccupancyGrid,
-            '/map',
-            self.map_callback,
-            10
         )
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -160,14 +154,23 @@ class DynamicTubeMPCNode(ObeliskController):
         self.dtmpc.set_path = np.array(plan_msg.z).reshape(plan_msg.horizon + 1, plan_msg.n)
         self.received_path = True
 
-        # TODO: is it always/ever necessary to reset the warm start?
-        # self.dtmpc.reset_warm_start()
+        if self.dtmpc_needs_warm_start_reset:
+            self.dtmpc.reset_warm_start()
+            self.dtmpc_needs_warm_start_reset = False
 
-    def nearest_points_callback(self, nearest_points_msg: NearestPointsMsg):
-        nearest_inds = np.array(nearest_points_msg.nearest_inds).reshape(2, nearest_points_msg.info.width, nearest_points_msg.height)
-        nearest_dists = np.array(nearest_points_msg.nearest_dists).reshape(nearest_points_msg.info.width, nearest_points_msg.height)
-        map_origin = np.array([nearest_points_msg.pose.x, nearest_points_msg.pose.y])
-        map_theta = nearest_points_msg.pose.theta
+    def nearest_points_callback(self, nearest_points_msg: GridMap):
+        data = np.array(
+            nearest_points_msg.data
+        ).reshape(len(nearest_points_msg.layers), nearest_points_msg.info.length_x, nearest_points_msg.info.length_y)
+        nearest_inds = data[1:, :, :]
+        nearest_dists = data[0, :, :]
+        map_origin = np.array([nearest_points_msg.info.pose.x, nearest_points_msg.info.pose.y])
+        _, _, map_theta = tf_transformations.euler_from_quaterion((
+            nearest_points_msg.pose.orientation.x,
+            nearest_points_msg.pose.orientation.y,
+            nearest_points_msg.pose.orientation.z,
+            nearest_points_msg.pose.orientation.w
+        ))
         self.dtmpc.update_nearest_inds(nearest_inds, nearest_dists, map_origin, map_theta)
 
     def laser_scan_callback(self, scan_msg: LaserScan):

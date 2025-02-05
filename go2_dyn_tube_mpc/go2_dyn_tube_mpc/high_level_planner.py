@@ -15,9 +15,9 @@ from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
 from go2_dyn_tube_mpc.exploration import Exploration
 from geometry_msgs.msg import Pose2D
-from go2_nav_msg.msg import NearestPointsMsg
-
+from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import OccupancyGrid, OccupancyGridUpdate
+import tf_transformations
 
 
 class HighLevelPlannerNode(ObeliskController):
@@ -85,7 +85,7 @@ class HighLevelPlannerNode(ObeliskController):
         self.register_obk_publisher(
             "pub_nearest_points_setting",
             key="pub_nearest_points_key",  # key can be specified here or in the config file
-            msg_type=NearestPointsMsg
+            msg_type=GridMap
         )
         self.register_obk_timer(
             "timer_nearest_pts_setting",
@@ -161,22 +161,30 @@ class HighLevelPlannerNode(ObeliskController):
         # Compute submaps
         nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = self.explorer.compute_nearest_inds(self.px_z[:2], self.nearest_points_size)
 
-        nearest_point_msg = NearestPointsMsg()
+        nearest_point_msg = GridMap()
+        # Header
         nearest_point_msg.header.stamp = self.get_clock().now().to_msg()
         nearest_point_msg.header.frame_id = "odom"
+
+        # Layers and info
+        nearest_point_msg.layers = ['sdf', 'nearest_x', 'nearest_y']
         nearest_point_msg.info.resolution = self.explorer.map.resolution
-        nearest_point_msg.info.width = self.nearest_dists.shape[0]
-        nearest_point_msg.info.height = self.nearest_dists.shape[1]
+        nearest_point_msg.info.length_x = self.nearest_dists.shape[0]
+        nearest_point_msg.info.length_y = self.nearest_dists.shape[1]
         # Convert origin and yaw to odom frame
         sub_map_odom_origin = np.array([
             np.cos(sub_map_yaw - self.map_to_odom_yaw) + np.sin(sub_map_yaw - self.map_to_odom_yaw),
             -np.sin(sub_map_yaw - self.map_to_odom_yaw) + np.cos(sub_map_yaw - self.map_to_odom_yaw),
         ]) * (sub_map_origin - self.map_to_odom_origin)
-        nearest_point_msg.pose.x = sub_map_odom_origin[0]
-        nearest_point_msg.pose.y = sub_map_odom_origin[1]
-        nearest_point_msg.pose.theta = sub_map_yaw - self.map_to_odom_yaw
-        nearest_point_msg.nearest_inds = nearest_inds.flatten()
-        nearest_point_msg.nearest_dists = nearest_dists.flatten()
+        nearest_point_msg.info.pose.x = sub_map_odom_origin[0]
+        nearest_point_msg.info.pose.y = sub_map_odom_origin[1]
+        quat = tf_transformations.quaternion_from_euler(0, 0, sub_map_yaw - self.map_to_odom_yaw)
+        nearest_point_msg.pose.orientation_x = quat[0]
+        nearest_point_msg.pose.orientation_y = quat[1]
+        nearest_point_msg.pose.orientation_z = quat[2]
+        nearest_point_msg.pose.orientation_w = quat[3]
+        # Data
+        nearest_point_msg.data = np.stack((nearest_dists[None, :, :], nearest_inds), axis=0).flatten().tolist()
         self.obk_publishers["pub_nearest_points_key"].publish(nearest_point_msg)
 
     @staticmethod
@@ -189,7 +197,7 @@ class HighLevelPlannerNode(ObeliskController):
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
         yaw = np.atan2(siny_cosp, cosy_cosp)
         return yaw
-
+    
     def compute_control(self) -> Trajectory:
         """Compute the control signal for the dummy 2-link robot.
 
