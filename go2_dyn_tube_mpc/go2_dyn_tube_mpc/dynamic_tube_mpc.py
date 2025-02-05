@@ -7,8 +7,7 @@ from scipy.interpolate import interp1d
 class DynamicTubeMPC:
     
     def __init__(self, dt, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max,
-            robot_radius=0, free=0, uncertain=1, occupied=2, partial_map_update_frac=0.25,
-            obs_rho=10, obs_constraint_method="QuadraticPenalty", fix_internal_constraints=False):
+            robot_radius=0, map_resolution=0.05, obs_rho=10, obs_constraint_method="QuadraticPenalty", fix_internal_constraints=False):
         # Dimensions
         self.N = N
         self.n = n
@@ -34,6 +33,7 @@ class DynamicTubeMPC:
         # Reference Trajectory
         self.path = None
         self.path_length = None
+        self.map_resolution = map_resolution
         self.ref_length = np.arange(self.N + 1) * self.v_max_bound[0] * dt
         self.z_ref = np.zeros((N + 1, n))
         self.v_ref = np.zeros((N, m))
@@ -53,14 +53,9 @@ class DynamicTubeMPC:
         assert self.obs_constraint_method in ["Constraint", "QuadraticPenalty", "LinearPenalty"]
 
         # Map / scan
-        self.map = MapUtils(free=free, uncertain=uncertain, occupied=occupied)
-        self.cell_dim = np.array([1., 1.])
-        self.map_origin = np.zeros((2,))
-        self.map_dist_transform = None
         self.map_nearest_inds = None
         self.map_unc_occ_nearest_inds = None
         self.scan = None
-        self.partial_map_update_frac = partial_map_update_frac
         self.fix_internal_constraints = fix_internal_constraints
 
         # Casadi variables
@@ -115,14 +110,9 @@ class DynamicTubeMPC:
     def update_scan(self, scan_points):
         self.scan = scan_points
 
-    def set_map(self, occ_grid, origin, resolution):
-        self.map.set_map(occ_grid, origin, resolution)
-        self.path_length = np.arange(self.N + 1) * resolution
-        self.compute_nearest_map_points()
-
-    def update_map(self, map_update, origin):
-        # TODO: update map
-        self.compute_nearest_map_points()
+    def update_nearest_inds(self, nearest_inds):
+        # TODO: update nearest_inds
+        pass
 
     def lbx(self):
         v_lb = ca.DM(np.repeat(self.v_min[:, None], self.N, 0))
@@ -156,14 +146,11 @@ class DynamicTubeMPC:
 
     def compute_constraints(self):
         # Constraint buffer, size of voxel + robot radius
-        constraint_buffer =  - np.sqrt(2) * self.map.resolution / 2 - self.robot_radius
-        # First, find the closest obstacles to each point along warm start
-        nearest_map_points, nearest_map_dists = self.get_nearest_map_points()  # Map
-        nearest_scan_points, nearest_scan_dists = self.get_nearest_scan_points()  # Scan
+        constraint_buffer = -np.sqrt(2) * self.map_resolution / 2 - self.robot_radius
 
         # Combine map and scan
-        use_scan = nearest_scan_dists < nearest_map_dists
-        nearest_points = np.where(use_scan[:, None], nearest_scan_points, nearest_map_points)
+        use_scan = self.nearest_scan_dists < np.abs(self.nearest_map_dists)
+        nearest_points = np.where(use_scan[:, None], self.nearest_scan_points, self.nearest_map_points)
         # TODO: Filter normals with adjacent occupancy information?
         normals = self.z_warm[:, :2] - nearest_points
 
@@ -172,41 +159,8 @@ class DynamicTubeMPC:
         b = -np.sum(A * nearest_points, axis=1) + constraint_buffer
 
         if self.fix_internal_constraints:
-            invalid_nodes = self.map[self.map.pose_to_map(self.z_warm)] != self.map.FREE
-            if np.any(invalid_nodes):
-                nearest_map_points_inv, nearest_map_dists_inv = self.get_nearest_occ_map_points(invalid_nodes)
-                nearest_scan_points_inv = nearest_scan_points[invalid_nodes]
-                nearest_scan_dists_inv = nearest_scan_dists[invalid_nodes]
-                use_scan_inv = nearest_scan_dists_inv < nearest_map_dists_inv
-                nearest_points_inv = np.where(use_scan_inv[:, None], nearest_scan_points_inv, nearest_map_points_inv)
-                normals = self.z_warm[invalid_nodes, :2] - nearest_points_inv
-                # Compute normals
-                A[invalid_nodes, :] = -normals / np.linalg.norm(normals, axis=1, keepdims=True)
-                b[invalid_nodes] = -np.sum(A[invalid_nodes, :] * nearest_points_inv, axis=1) + constraint_buffer
-        # import matplotlib.pyplot as plt
-        # d = 0.2
-        # yel = np.array([0.9290, 0.6940, 0.1250])
-        # pur = np.array([0.4940, 0.1840, 0.5560])
-        # fig, ax = plt.subplots()
-        # self.map.plot(ax=ax)
-        # ax.plot(self.z_ref[:, 0] / self.map.resolution, self.z_ref[:, 1] / self.map.resolution, '.-r')
-        # ax.plot(self.z_warm[:, 0] / self.map.resolution, self.z_warm[:, 1] / self.map.resolution, '.-b')
-        # for i in range(21):
-        #     plt.plot(nearest_points[i, 0] / self.map.resolution, nearest_points[i, 1] / self.map.resolution, '.g')
-        #     a0 = A[i, :]
-        #     b0 = b[i]
-        #     print(np.inner(a0, nearest_points[i, :]) + b0)
-        #     if abs(a0[1]) > 0.4:
-        #         q = nearest_points[i, 0]
-        #         c = abs(d / 2 * a0[1] / np.linalg.norm(a0))
-        #         x = np.linspace(q - c, q + c)
-        #         plt.plot(x / self.map.resolution, -(a0[0] * x + b0) / a0[1] / self.map.resolution, c=yel * (i / 20) + pur * (20 - i) / 20)
-        #     else:
-        #         q = nearest_points[i, 1]
-        #         c = abs(d / 2 * a0[0] / np.linalg.norm(a0))
-        #         y = np.linspace(q - c, q + c)
-        #         plt.plot(-(a0[1] * y + b0) / a0[0] / self.map.resolution, y / self.map.resolution, c=yel * (i / 20) + pur * (20 - i) / 20)
-        # plt.show()
+            A[self.nearest_map_dists < 0] *= -1
+            b[self.nearest_map_dists] += (np.sqrt(2) + 1) * self.map_resolution / 2
         return A, b
 
     @staticmethod
@@ -298,13 +252,8 @@ class DynamicTubeMPC:
         dist = z - z0
         return dist, ca.DM(*dist.shape), ca.DM(*dist.shape)
 
-    def compute_nearest_map_points(self):
-        # TODO: local updates to these indices when possible
-        self.map_nearest_inds = self.map.get_nearest_inds()
-        if self.fix_internal_constraints:
-            self.map_unc_occ_nearest_inds = self.map.get_nearest_inds(free=False)
-
     def get_nearest_map_points(self):
+        # TODO: need occupancy grid of warm start...
         warm_x, warm_y = self.map.pose_to_map(self.z_warm)
 
         nearest_points = self.map_nearest_inds[:, warm_x, warm_y].T
@@ -326,9 +275,6 @@ class DynamicTubeMPC:
         tree = KDTree(self.scan)
         dists, inds = tree.query(self.z_warm[:, :2])  # Find nearest neighbor indices
         return self.scan[inds], dists
-
-    def set_map_origin(self, map_origin):
-        self.map.set_origin(map_origin)
 
     def setup_ocp(self):
         self.z_lb = ca.DM(self.N + 1, self.n)

@@ -39,24 +39,16 @@ class HighLevelPlannerNode(ObeliskController):
         )
 
         # Velocity bounds
-        self.declare_parameter("v_max_dyn", [0.2, 0.2, 0.2])
-        self.v_max_dyn = np.array(self.get_parameter("v_max_dyn").get_parameter_value().double_array_value)
-        self.declare_parameter("v_min_dyn", [-0.1, -0.2, -0.2])
-        self.v_min_dyn = np.array(self.get_parameter("v_min_dyn").get_parameter_value().double_array_value)
-        assert np.all(self.v_max_dyn > 0) and np.all(self.v_min_dyn <= 0)
-
-        self.declare_parameter("v_max_map", [0.5, 0.5, 0.5])
-        self.v_max_map = np.array(self.get_parameter("v_max_map").get_parameter_value().double_array_value)
-        self.declare_parameter("v_min_map", [-0.1, -0.5, -0.5])
-        self.v_min_map = np.array(self.get_parameter("v_min_map").get_parameter_value().double_array_value)
-        assert np.all(self.v_max_map > 0) and np.all(self.v_min_map <= 0)
+        self.declare_parameter("v_max_mapping", 0.2)
+        self.v_max_mapping = self.get_parameter("v_max_mapping").get_parameter_value().double_value
 
         self.goal_pose = np.zeros((3,))
         self.px_z = np.zeros((3,))
         self.received_goal = False
         self.received_curr = False
+        self.received_map = False
+        self.update_entire_map = True
 
-        # TODO: get initial map
         # Declare subscriber to pose commands
         self.register_obk_subscription(
             "sub_goal_setting",
@@ -65,8 +57,14 @@ class HighLevelPlannerNode(ObeliskController):
             msg_type=Pose2D
         )
         self.register_obk_subscription(
-            "sub_map_setting",
+            "sub_map_update_setting",
             self.map_update_callback,  # type: ignore
+            key="sub_map_update_key",  # key can be specified here or in the config file
+            msg_type=OccupancyGridUpdate
+        )
+        self.register_obk_subscription(
+            "sub_map_setting",
+            self.map_callback,  # type: ignore
             key="sub_map_key",  # key can be specified here or in the config file
             msg_type=OccupancyGridUpdate
         )
@@ -74,6 +72,11 @@ class HighLevelPlannerNode(ObeliskController):
             "pub_vel_lim_setting",
             key="pub_vel_lim_key",  # key can be specified here or in the config file
             msg_type=VelocityCommand
+        )
+        self.register_obk_publisher(
+            "pub_nearest_points_setting",
+            key="pub_nearest_points_key",  # key can be specified here or in the config file
+            msg_type=OccupancyGrid
         )
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -105,11 +108,44 @@ class HighLevelPlannerNode(ObeliskController):
         self.goal_pose = np.array([goal_msg.x, goal_msg.y, goal_msg.theta])
         self.received_goal = True
 
-    def map_update_callback(self, map_update_msg: OccupancyGridUpdate):
-        # TODO: update the map of the explorer
+    def map_callback(self, map_msg: OccupancyGrid):
+        if self.update_entire_map:
+            occ_grid = np.array(map_msg.data, dtype=np.int8).reshape(map_msg.info.height, map_msg.info.width)
+            th = self.quat2yaw([map_msg.orientation.x, map_msg.orientation.y, map_msg.orientation.z, map_msg.orientation.w])
+            origin = np.array([map_msg.info.origin.position.x, map_msg.info.origin.position.y, th])
+            self.explorer.set_map(occ_grid, origin, map_msg.info.resolution)
+            self.received_map = True
+            self.update_entire_map = False
 
-        # TODO: Dilate obstacles by robot radius
-        pass
+    def map_update_callback(self, map_update_msg: OccupancyGridUpdate):
+        x = map_update_msg.x
+        y = map_update_msg.y
+        h = map_update_msg.height
+        w = map_update_msg.width
+        if x < 0 or y < 0 or x + w >= self.map.shape[0] or y + h >= self.map.shape[1] or self.update_entire_map:
+            self.update_entire_map = True
+            return
+        update_occ = np.array(map_update_msg.data, dtype=np.int8).reshape(h, w)
+        self.explorer.update_map(update_occ, (x, y))
+
+    def pub_nearest_points_callback(self):  # TODO: publish at 10Hz
+        # TODO: Frames properly
+        nearest_points = self.explorer.compute_nearest_inds(self.px_z[:2], self.nearest_points_size)
+
+        nearest_point_msg = OccupancyGrid()
+        nearest_point_msg.header.stamp = self.get_clock().now().to_msg()
+        nearest_point_msg.header.frame_id = "map"
+        nearest_point_msg.info.resolution = self.explorer.map.resolution
+        nearest_point_msg.info.width = self.nearest_points_size
+        nearest_point_msg.info.height = self.nearest_points_size
+        nearest_point_msg.info.origin.position.x = ...
+        nearest_point_msg.info.origin.position.y = ...
+        nearest_point_msg.info.origin.orientation.x = ...
+        nearest_point_msg.info.origin.orientation.y = ...
+        nearest_point_msg.info.origin.orientation.z = ...
+        nearest_point_msg.info.origin.orientation.w = ...
+        nearest_point_msg.data = nearest_points.flatten()
+        self.obk_publishers["pub_nearest_points_key"].publish(nearest_point_msg)
 
     @staticmethod
     def quat2yaw(quat):

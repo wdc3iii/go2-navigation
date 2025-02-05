@@ -1,6 +1,5 @@
 from typing import List, Optional
 
-from numpy.ma.core import where
 from rclpy.executors import SingleThreadedExecutor
 from obelisk_py.core.utils.ros import spin_obelisk
 import numpy as np
@@ -59,29 +58,29 @@ class DynamicTubeMPCNode(ObeliskController):
         self.ts = np.arange(0, self.N + 1) * self.dt
 
         # Velocity bounds
-        self.declare_parameter("v_max", [0.5, 0.5, 0.5])
+        self.declare_parameter("v_max", [0.5, 0.5, 1.0])
         self.v_max_bound = np.array(self.get_parameter("v_max").get_parameter_value().double_array_value)
-        self.declare_parameter("v_min", [-0.1, -0.5, -0.5])
+        self.declare_parameter("v_min", [-0.1, -0.5, -1.0])
         self.v_min_bound = np.array(self.get_parameter("v_min").get_parameter_value().double_array_value)
         assert np.all(self.v_max_bound > 0) and np.all(self.v_min_bound <= 0)
         self.v_max = self.v_max_bound
         self.v_min = self.v_min_bound
 
         # Cost matrices
-        self.declare_parameter("Q", [1., 0., 0., 0., 1., 0., 0., 0., 0.1])          # State cost
-        Q = np.array(self.get_parameter("Q").get_parameter_value().double_array_value).reshape(self.n, self.n)
-        self.declare_parameter("Qf", [10., 0., 0., 0., 10., 0., 0., 0., 10.])       # Terminal Cost
-        Qf = np.array(self.get_parameter("Qf").get_parameter_value().double_array_value).reshape(self.n, self.n)
-        self.declare_parameter("R", [0.1, 0., 0., 0., 0.1, 0., 0., 0., 0.1])        # Temporal weights on state cost
-        R = np.array(self.get_parameter("R").get_parameter_value().double_array_value).reshape(self.m, self.m)
+        self.declare_parameter("Q", [1., 1., 0.1])          # State cost
+        Q = np.diag(self.get_parameter("Q").get_parameter_value().double_array_value)
+        self.declare_parameter("Qf", [10., 10., 10.])       # Terminal Cost
+        Qf = np.diag(self.get_parameter("Qf").get_parameter_value().double_array_value)
+        self.declare_parameter("R", [0.1, 0.1, 0.1])        # Temporal weights on state cost
+        R = np.diag(self.get_parameter("R").get_parameter_value().double_array_value).reshape(self.m, self.m)
         self.declare_parameter("Q_schedule", np.linspace(0, 1, self.N).tolist())    # Schedule on state cost (allow more deviation of trajectory from plan near beginning)
-        Q_sched = np.array(self.get_parameter("Q_schedule").get_parameter_value().double_array_value)
-        self.declare_parameter("Rv_first", [0., 0., 0., 0., 0., 0., 0., 0., 0.])      # First order rate penalty on input
-        Rv_first = np.array(self.get_parameter("Rv_first").get_parameter_value().double_array_value).reshape(self.n, self.n)
+        Q_sched = np.diag(self.get_parameter("Q_schedule").get_parameter_value().double_array_value)
+        self.declare_parameter("Rv_first", [0.1, 0.1, 0.1])      # First order rate penalty on input
+        Rv_first = np.diag(self.get_parameter("Rv_first").get_parameter_value().double_array_value)
         self.declare_parameter("Rv_second", [0., 0., 0., 0., 0., 0., 0., 0., 0.])     # Second order rate penalty on input
-        Rv_second = np.array(self.get_parameter("Rv_second").get_parameter_value().double_array_value).reshape(self.n, self.n)
+        Rv_second = np.diag(self.get_parameter("Rv_second").get_parameter_value().double_array_value)
 
-        self.dtmpc = DynamicTubeMPC(self.N, self.n, self.m, Q, Qf, R, Rv_first, Rv_second, Q_sched)
+        self.dtmpc = DynamicTubeMPC(self.dt, self.N, self.n, self.m, Q, Qf, R, Rv_first, Rv_second, Q_sched, self.v_min_bound, self.v_max_bound, robot_radius=self.robot_radius)
 
         # Declare subscriber to high level plans
         self.register_obk_subscription(
@@ -99,9 +98,9 @@ class DynamicTubeMPCNode(ObeliskController):
         )
         # Subscriber to map update
         self.register_obk_subscription(
-            "sub_map_setting",
-            self.map_update_callback,  # type: ignore
-            key="sub_map_key",  # key can be specified here or in the config file
+            "sub_nearest_points_setting",
+            self.nearest_points_callback,  # type: ignore
+            key="sub_nearest_points_key",  # key can be specified here or in the config file
             msg_type=OccupancyGridUpdate
         )
         # Subscriber to laser scan
@@ -160,25 +159,12 @@ class DynamicTubeMPCNode(ObeliskController):
         # TODO: is it always/ever necessary to reset the warm start?
         # self.dtmpc.reset_warm_start()
 
-    def map_update_callback(self, map_update_msg: OccupancyGridUpdate):
-        x = map_update_msg.x
-        y = map_update_msg.y
-        h = map_update_msg.height
-        w = map_update_msg.width
-        if x < 0 or y < 0 or x + w >= self.map.shape[0] or y + h >= self.map.shape[1] or self.update_entire_map:
-            self.update_entire_map = True
-            return
-        update_occ = np.array(map_update_msg.data, dtype=np.int8).reshape(h, w)
-        self.dtmpc.update_map(update_occ, (x, y))
+    def nearest_points_callback(self, nearest_points_msg: OccupancyGrid):
+        # TODO: update the scan of the DTMPC
+        # Convert the laser scan into the global frame
 
-    def map_callback(self, map_msg: OccupancyGrid):
-        if self.update_entire_map:
-            occ_grid = np.array(map_msg.data, dtype=np.int8).reshape(map_msg.info.height, map_msg.info.width)
-            th = self.quat2yaw([map_msg.orientation.x, map_msg.orientation.y, map_msg.orientation.z, map_msg.orientation.w])
-            origin = np.array([map_msg.info.origin.position.x, map_msg.info.origin.position.y, th])
-            self.dtmpc.set_map(occ_grid, origin, map_msg.info.resolution)
-            self.received_map = True
-            self.update_entire_map = False
+        nearest_inds = np.array(nearest_points_msg.data).reshape(2, nearest_points_msg.info.width, nearest_points_msg.height)
+        self.dtmpc.update_nearest_inds(nearest_inds)
 
     def laser_scan_callback(self, scan_msg: LaserScan):
         # TODO: update the scan of the DTMPC
