@@ -52,6 +52,7 @@ class HighLevelPlannerNode(ObeliskController):
         assert np.all(self.v_max_map > 0) and np.all(self.v_min_map <= 0)
 
         self.goal_pose = np.zeros((3,))
+        self.px_z = np.zeros((3,))
         self.received_goal = False
         self.received_curr = False
 

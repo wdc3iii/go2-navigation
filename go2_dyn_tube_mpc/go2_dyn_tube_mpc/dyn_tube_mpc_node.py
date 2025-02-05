@@ -1,5 +1,6 @@
 from typing import List, Optional
 
+from numpy.ma.core import where
 from rclpy.executors import SingleThreadedExecutor
 from obelisk_py.core.utils.ros import spin_obelisk
 import numpy as np
@@ -32,6 +33,16 @@ class DynamicTubeMPCNode(ObeliskController):
         super().__init__(node_name, Trajectory, EstimatedState)
         self.n = 3
         self.m = 3
+        self.px_z = np.zeros((3,))
+        self.px_v = np.zeros((3,))
+        self.z_ref = np.zeros((self.n, self.N + 1))
+        self.v_ref = np.zeros((self.m, self.N))
+
+        self.path = None
+        self.received_path = False
+        self.received_map = False
+        self.update_entire_map = True
+
         # Load policy
         # self.declare_parameter("tube_path", "")
         # tube_path = self.get_parameter("tube_path").get_parameter_value().string_value
@@ -53,6 +64,9 @@ class DynamicTubeMPCNode(ObeliskController):
         self.declare_parameter("v_min", [-0.1, -0.5, -0.5])
         self.v_min_bound = np.array(self.get_parameter("v_min").get_parameter_value().double_array_value)
         assert np.all(self.v_max_bound > 0) and np.all(self.v_min_bound <= 0)
+        self.v_max = self.v_max_bound
+        self.v_min = self.v_min_bound
+
         # Cost matrices
         self.declare_parameter("Q", [1., 0., 0., 0., 1., 0., 0., 0., 0.1])          # State cost
         Q = np.array(self.get_parameter("Q").get_parameter_value().double_array_value).reshape(self.n, self.n)
@@ -69,46 +83,45 @@ class DynamicTubeMPCNode(ObeliskController):
 
         self.dtmpc = DynamicTubeMPC(self.N, self.n, self.m, Q, Qf, R, Rv_first, Rv_second, Q_sched)
 
-        # Declare subscriber to velocity commands
+        # Declare subscriber to high level plans
         self.register_obk_subscription(
             "sub_plan_setting",
             self.plan_callback,  # type: ignore
             key="sub_plan_key",  # key can be specified here or in the config file
             msg_type=Trajectory
         )
+        # Subscriber to velocity limits from high level
         self.register_obk_subscription(
             "sub_vel_lim_setting",
             self.vel_lim_callback,  # type: ignore
             key="sub_vel_lim_key",  # key can be specified here or in the config file
             msg_type=VelocityCommand
         )
+        # Subscriber to map update
         self.register_obk_subscription(
             "sub_map_setting",
             self.map_update_callback,  # type: ignore
             key="sub_map_key",  # key can be specified here or in the config file
             msg_type=OccupancyGridUpdate
         )
+        # Subscriber to laser scan
         self.register_obk_subscription(
             "sub_scan_setting",
             self.laser_scan_callback,  # type: ignore
             key="sub_scan_key",  # key can be specified here or in the config file
             msg_type=LaserScan
         )
+        # Subscribe to /map once (destroy after first call)
+        self.map_subscription = self.create_subscription(
+            OccupancyGrid,
+            '/map',
+            self.map_callback,
+            10
+        )
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Configure the controller."""
         super().on_configure(state)
-        self.px_z = np.zeros((3,))
-        self.px_v = np.zeros((3,))
-        self.z_ref = np.zeros((self.n, self.N + 1))
-        self.v_ref = np.zeros((self.m, self.N))
-
-        self.v_max = self.v_max_bound
-        self.v_min = self.v_min_bound
-
-        self.recieved_path = False
-
-        # TODO: Set the initial map for the DTMPC
         
         return TransitionCallbackReturn.SUCCESS
 
@@ -141,24 +154,41 @@ class DynamicTubeMPCNode(ObeliskController):
 
     def plan_callback(self, plan_msg: Trajectory):
         # Accepts a trajectory which is a sequence of waypoints
-        self.plan = np.array(plan_msg.z).reshape(plan_msg.horizon + 1, plan_msg.n)
-        self.recieved_path = True
+        self.dtmpc.set_path = np.array(plan_msg.z).reshape(plan_msg.horizon + 1, plan_msg.n)
+        self.received_path = True
 
-        # TODO: use this to set reference for DTMPC. Maybe with smoothing?
-
-        # TODO: reset DTMPC warmstart
+        # TODO: is it always/ever necessary to reset the warm start?
+        # self.dtmpc.reset_warm_start()
 
     def map_update_callback(self, map_update_msg: OccupancyGridUpdate):
-        # TODO: update the map of the DTMPC
-        pass
+        x = map_update_msg.x
+        y = map_update_msg.y
+        h = map_update_msg.height
+        w = map_update_msg.width
+        if x < 0 or y < 0 or x + w >= self.map.shape[0] or y + h >= self.map.shape[1] or self.update_entire_map:
+            self.update_entire_map = True
+            return
+        update_occ = np.array(map_update_msg.data, dtype=np.int8).reshape(h, w)
+        self.dtmpc.update_map(update_occ, (x, y))
+
+    def map_callback(self, map_msg: OccupancyGrid):
+        if self.update_entire_map:
+            occ_grid = np.array(map_msg.data, dtype=np.int8).reshape(map_msg.info.height, map_msg.info.width)
+            th = self.quat2yaw([map_msg.orientation.x, map_msg.orientation.y, map_msg.orientation.z, map_msg.orientation.w])
+            origin = np.array([map_msg.info.origin.position.x, map_msg.info.origin.position.y, th])
+            self.dtmpc.set_map(occ_grid, origin, map_msg.info.resolution)
+            self.received_map = True
+            self.update_entire_map = False
 
     def laser_scan_callback(self, scan_msg: LaserScan):
-        # TODO: update the map of the DTMPC
-        pass
+        # TODO: update the scan of the DTMPC
+        # Convert the laser scan into the global frame
+        scan_points = ...
+        self.dtmpc.update_scan(scan_points)
 
     def vel_lim_callback(self, v_max_msg: VelocityCommand):
         """Sets the upper bound on velocity limits for the planner"""
-        prop_v_lim = np.clip(np.array(v_max_msg.v_x, v_max_msg.v_y, v_max_msg.w_z), 0, 1)
+        prop_v_lim = np.clip(np.array([v_max_msg.v_x, v_max_msg.v_y, v_max_msg.w_z]), 0, 1)
         self.v_max = prop_v_lim * self.v_max_bound
         self.v_min = prop_v_lim * self.v_min_bound
 
@@ -182,13 +212,14 @@ class DynamicTubeMPCNode(ObeliskController):
             obelisk_control_msg: The control message.
         """
         # Don't plan if we haven't received a path to follow
-        if not self.recieved_path:
-            return
-        
+        traj_msg = Trajectory()
+        if not (self.recieved_path and self.received_map):
+            return traj_msg
+
+        # Solve the MPC
         z, v = self.dtmpc.solve()
 
-        # setting the message
-        traj_msg = Trajectory()
+        # Construct the message
         traj_msg.header.stamp = self.get_clock().now().to_msg()
         traj_msg.z = z.tolist()
         traj_msg.v = v.tolist()
