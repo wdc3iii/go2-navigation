@@ -1,5 +1,7 @@
 from typing import List, Optional
 
+import tf2_ros
+import rospy
 from rclpy.executors import SingleThreadedExecutor
 from obelisk_py.core.utils.ros import spin_obelisk
 import numpy as np
@@ -13,6 +15,8 @@ from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
 from go2_dyn_tube_mpc.exploration import Exploration
 from geometry_msgs.msg import Pose2D
+from go2_nav_msg.msg import NearestPointsMsg
+
 from nav_msgs.msg import OccupancyGrid, OccupancyGridUpdate
 
 
@@ -29,6 +33,9 @@ class HighLevelPlannerNode(ObeliskController):
     def __init__(self, node_name: str = "dynamic_tube_mpc_controller") -> None:
         """Initialize the example position setpoint controller."""
         super().__init__(node_name, Trajectory, EstimatedState)
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
         # Load DTMPC parameters
         # Horizon length, timing
@@ -48,6 +55,8 @@ class HighLevelPlannerNode(ObeliskController):
         self.received_curr = False
         self.received_map = False
         self.update_entire_map = True
+        self.map_to_odom_p = None
+        self.map_to_odom_yaw = None
 
         # Declare subscriber to pose commands
         self.register_obk_subscription(
@@ -76,7 +85,12 @@ class HighLevelPlannerNode(ObeliskController):
         self.register_obk_publisher(
             "pub_nearest_points_setting",
             key="pub_nearest_points_key",  # key can be specified here or in the config file
-            msg_type=OccupancyGrid
+            msg_type=NearestPointsMsg
+        )
+        self.register_obk_timer(
+            "timer_nearest_pts_setting",
+            self.pub_nearest_points_callback,
+            key="timer_nearest_pts_key"
         )
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -128,23 +142,41 @@ class HighLevelPlannerNode(ObeliskController):
         update_occ = np.array(map_update_msg.data, dtype=np.int8).reshape(h, w)
         self.explorer.update_map(update_occ, (x, y))
 
-    def pub_nearest_points_callback(self):  # TODO: publish at 10Hz
-        # TODO: Frames properly
-        nearest_points = self.explorer.compute_nearest_inds(self.px_z[:2], self.nearest_points_size)
+    def pub_nearest_points_callback(self):
+        try:
+            # Get transform from odom to robot frame
+            map_to_odom = self.tf_buffer.lookup_transform("map", "odom", rospy.Time(0), rospy.Duration(1.0))
 
-        nearest_point_msg = OccupancyGrid()
+            # Extract robot pose in odom
+            self.map_to_odom_p = np.array([
+                map_to_odom.transform.translation.x, map_to_odom.transform.translation.y
+            ])
+            self.map_to_odom_yaw = self.get_yaw_from_quaternion(map_to_odom.transform.rotation)
+        except tf2_ros.LookupException as e:
+            self.get_logger().warm(f"Transform error: {e}")
+
+        if self.map_to_odom_yaw is None:
+            return
+
+        # Compute submaps
+        nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = self.explorer.compute_nearest_inds(self.px_z[:2], self.nearest_points_size)
+
+        nearest_point_msg = NearestPointsMsg()
         nearest_point_msg.header.stamp = self.get_clock().now().to_msg()
-        nearest_point_msg.header.frame_id = "map"
+        nearest_point_msg.header.frame_id = "odom"
         nearest_point_msg.info.resolution = self.explorer.map.resolution
-        nearest_point_msg.info.width = self.nearest_points_size
-        nearest_point_msg.info.height = self.nearest_points_size
-        nearest_point_msg.info.origin.position.x = ...
-        nearest_point_msg.info.origin.position.y = ...
-        nearest_point_msg.info.origin.orientation.x = ...
-        nearest_point_msg.info.origin.orientation.y = ...
-        nearest_point_msg.info.origin.orientation.z = ...
-        nearest_point_msg.info.origin.orientation.w = ...
-        nearest_point_msg.data = nearest_points.flatten()
+        nearest_point_msg.info.width = self.nearest_dists.shape[0]
+        nearest_point_msg.info.height = self.nearest_dists.shape[1]
+        # Convert origin and yaw to odom frame
+        sub_map_odom_origin = np.array([
+            np.cos(sub_map_yaw - self.map_to_odom_yaw) + np.sin(sub_map_yaw - self.map_to_odom_yaw),
+            -np.sin(sub_map_yaw - self.map_to_odom_yaw) + np.cos(sub_map_yaw - self.map_to_odom_yaw),
+        ]) * (sub_map_origin - self.map_to_odom_origin)
+        nearest_point_msg.pose.x = sub_map_odom_origin[0]
+        nearest_point_msg.pose.y = sub_map_odom_origin[1]
+        nearest_point_msg.pose.theta = sub_map_yaw - self.map_to_odom_yaw
+        nearest_point_msg.nearest_inds = nearest_inds.flatten()
+        nearest_point_msg.nearest_dists = nearest_dists.flatten()
         self.obk_publishers["pub_nearest_points_key"].publish(nearest_point_msg)
 
     @staticmethod

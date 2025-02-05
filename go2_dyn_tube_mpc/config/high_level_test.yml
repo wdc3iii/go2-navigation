@@ -17,7 +17,7 @@ onboard:
           topic: /obelisk/go2/dtmpc_vel_lim
           history_depth: 10
           callback_group: None
-        # ----- Vel Limit Publisher ----- #
+        # ----- NearestPoints Publisher ----- #
         - ros_parameter: pub_nearest_points_setting
           topic: /obelisk/go2/nearest_points
           history_depth: 10
@@ -47,6 +47,9 @@ onboard:
         - ros_parameter: timer_ctrl_setting
           timer_period_sec: 1.0
           callback_group: None
+        - ros_parameter: timer_nearest_pts_setting
+          timer_period_sec: 0.1
+          callback_group: None
   # ----- DTMPC ----- #
     - pkg: go2_dyn_tube_mpc
       executable: dynamic_tube_mpc
@@ -75,7 +78,7 @@ onboard:
           callback_group: None
       timers:
         - ros_parameter: timer_ctrl_setting
-          timer_period_sec: 0.1  # Control callback is not being used
+          timer_period_sec: 0.1
           callback_group: None
   estimation:
     - pkg: obelisk_unitree_cpp

@@ -1,13 +1,14 @@
 import numpy as np
 import casadi as ca
 from scipy.spatial import KDTree
-from go2_dyn_tube_mpc.map_utils import MapUtils
+from go2_dyn_tube_mpc.map_utils import map_to_pose, pose_to_map
 from scipy.interpolate import interp1d
 
 class DynamicTubeMPC:
     
     def __init__(self, dt, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max,
-            robot_radius=0, map_resolution=0.05, obs_rho=10, obs_constraint_method="QuadraticPenalty", fix_internal_constraints=False):
+                 robot_radius=0, map_resolution=0.05, obs_rho=10,
+                 obs_constraint_method="QuadraticPenalty", fix_internal_constraints=False):
         # Dimensions
         self.N = N
         self.n = n
@@ -54,6 +55,9 @@ class DynamicTubeMPC:
 
         # Map / scan
         self.map_nearest_inds = None
+        self.map_nearest_dists = None
+        self.map_origin = np.zeros((2,))
+        self.map_theta = 0
         self.map_unc_occ_nearest_inds = None
         self.scan = None
         self.fix_internal_constraints = fix_internal_constraints
@@ -89,7 +93,7 @@ class DynamicTubeMPC:
         self.v_max = np.clip(v_max, np.zeros((3,)), self.v_max_bound)
 
     def set_path(self, path):
-        self.path = self.map.map_to_pose(path)
+        self.path = path
         distances = np.linalg.norm(np.diff(self.path, axis=0), axis=1)
         self.path_length = np.insert(np.cumsum(distances), 0, 0)
 
@@ -110,9 +114,11 @@ class DynamicTubeMPC:
     def update_scan(self, scan_points):
         self.scan = scan_points
 
-    def update_nearest_inds(self, nearest_inds):
-        # TODO: update nearest_inds
-        pass
+    def update_nearest_inds(self, map_nearest_inds, nearest_map_dists, map_origin, map_theta):
+        self.map_nearest_inds = map_nearest_inds
+        self.map_nearest_dists = nearest_map_dists
+        self.map_origin = map_origin
+        self.map_theta = map_theta
 
     def lbx(self):
         v_lb = ca.DM(np.repeat(self.v_min[:, None], self.N, 0))
@@ -147,10 +153,12 @@ class DynamicTubeMPC:
     def compute_constraints(self):
         # Constraint buffer, size of voxel + robot radius
         constraint_buffer = -np.sqrt(2) * self.map_resolution / 2 - self.robot_radius
+        nearest_map_points, nearest_map_dists = self.get_nearest_map_points()
+        nearest_scan_points, nearest_scan_dists = self.get_nearest_scan_points()
 
         # Combine map and scan
-        use_scan = self.nearest_scan_dists < np.abs(self.nearest_map_dists)
-        nearest_points = np.where(use_scan[:, None], self.nearest_scan_points, self.nearest_map_points)
+        use_scan = nearest_scan_dists < np.abs(nearest_map_dists)
+        nearest_points = np.where(use_scan[:, None], nearest_scan_points, nearest_map_points)
         # TODO: Filter normals with adjacent occupancy information?
         normals = self.z_warm[:, :2] - nearest_points
 
@@ -159,8 +167,8 @@ class DynamicTubeMPC:
         b = -np.sum(A * nearest_points, axis=1) + constraint_buffer
 
         if self.fix_internal_constraints:
-            A[self.nearest_map_dists < 0] *= -1
-            b[self.nearest_map_dists] += (np.sqrt(2) + 1) * self.map_resolution / 2
+            A[nearest_map_dists < 0] *= -1
+            b[nearest_map_dists < 0] += (np.sqrt(2) + 1) * self.map_resolution / 2
         return A, b
 
     @staticmethod
@@ -253,20 +261,12 @@ class DynamicTubeMPC:
         return dist, ca.DM(*dist.shape), ca.DM(*dist.shape)
 
     def get_nearest_map_points(self):
-        # TODO: need occupancy grid of warm start...
-        warm_x, warm_y = self.map.pose_to_map(self.z_warm)
-
+        warm_x, warm_y = pose_to_map(self.z_warm, self.map_origin, self.map_theta, self.map_resolution)
+        nearest_dists = self.map_nearest_dists[warm_x, warm_y].T
         nearest_points = self.map_nearest_inds[:, warm_x, warm_y].T
-        nearest_points = self.map.map_to_pose(nearest_points)
+        nearest_points = map_to_pose(nearest_points, self.map_origin, self.map_theta, self.map_resolution)
         dists = np.linalg.norm(nearest_points - self.z_warm[:, :2], axis=1)
-        return nearest_points, dists
-
-    def get_nearest_occ_map_points(self, invalid_inds):
-        warm_x, warm_y = self.map.pose_to_map(self.z_warm[invalid_inds])
-
-        nearest_points = self.map_unc_occ_nearest_inds[:, warm_x, warm_y].T
-        nearest_points = self.map.map_to_pose(nearest_points)
-        dists = np.linalg.norm(nearest_points - self.z_warm[invalid_inds, :2], axis=1)
+        dists[nearest_dists < 0] *= -1
         return nearest_points, dists
 
     def get_nearest_scan_points(self):

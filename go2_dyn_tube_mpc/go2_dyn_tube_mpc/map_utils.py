@@ -3,6 +3,27 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import distance_transform_edt
 import matplotlib.transforms as mtransforms
 
+
+def map_to_pose(map_inds, map_origin, map_theta, resolution):
+    R = np.array([
+        [np.cos(map_theta), -np.sin(map_theta)],
+        [np.sin(map_theta), np.cos(map_theta)]
+    ])
+    rel_pos = (map_inds + 0.5) * resolution
+
+    return map_origin + (R @ rel_pos.T).T
+
+
+def pose_to_map(pose, map_origin, map_theta, resolution):
+    rel_pose = pose - map_origin
+    Rinv = np.array([
+        [np.cos(map_theta), np.sin(map_theta)],
+        [-np.sin(map_theta), np.cos(map_theta)]
+    ])
+    map_inds = (Rinv @ rel_pose.T / resolution).astype(int).T
+    return map_inds[..., 0].tolist(), map_inds[..., 1].tolist()
+
+
 class MapUtils:
 
     """Implements a map object, for easily accessing functionality"""
@@ -58,26 +79,15 @@ class MapUtils:
             raise TypeError(f"Pose type {type(pose)} not recognized.")
         if pose.shape[-1] == 3:
             pose = pose[..., :2]
-        rel_pose = pose - self.map_origin
-        Rinv = np.array([
-            [np.cos(self.map_theta), np.sin(self.map_theta)],
-            [-np.sin(self.map_theta), np.cos(self.map_theta)]
-        ])
-        map_inds = (Rinv @ rel_pose.T / self.resolution).astype(int).T
-        return map_inds[..., 0].tolist(), map_inds[..., 1].tolist()
+        return pose_to_map(pose, self.map_origin, self.map_theta, self.resolution)
+
 
     def map_to_pose(self, map_inds):
         if isinstance(map_inds, list):
             map_inds = np.array(map_inds)
         if not isinstance(map_inds, np.ndarray):
             raise TypeError(f"Indices type {type(map_inds)} not recognized.")
-        R = np.array([
-            [np.cos(self.map_theta), -np.sin(self.map_theta)],
-            [np.sin(self.map_theta), np.cos(self.map_theta)]
-        ])
-        rel_pos = (map_inds + 0.5) * self.resolution
-
-        return self.map_origin + (R @ rel_pos.T).T
+        return map_to_pose(map_inds, self.map_origin, self.map_theta, self.resolution)
 
     def get_nearest_inds(self, center, size, free=True):
         center_inds = self.pose_to_map(center)
@@ -89,8 +99,16 @@ class MapUtils:
         input_im = self[x1:x2, y1:y2] == self.FREE
         if not free:
             input_im = np.logical_not(input_im)
-        _, nearest_inds = distance_transform_edt(input_im, return_indices=True)
-        return np.flip(nearest_inds, axis=0).transpose(0, 2, 1)
+        nearest_dists, nearest_inds = distance_transform_edt(input_im, return_indices=True)
+
+        dx = x1 * self.map_resolution
+        dy = y1 * self.map_resolution
+        sub_map_p = self.map_origin + np.array([
+            dx * np.cos(self.map_theta) - dy * np.sin(self.map_theta),
+            dx * np.sin(self.map_theta) + dy * np.cos(self.map_theta),
+        ])
+
+        return np.flip(nearest_inds, axis=0).transpose(0, 2, 1), nearest_dists.T, sub_map_p, self.map_theta
 
     def plot(self, ax):
         # extent = np.array([-0.5, self.shape[0] - 0.5, -0.5, self.shape[1] - 0.5]) * self.resolution

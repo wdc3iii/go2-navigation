@@ -1,13 +1,16 @@
 from typing import List, Optional
-
+import rospy
+import tf2_ros
 from rclpy.executors import SingleThreadedExecutor
 from obelisk_py.core.utils.ros import spin_obelisk
 import numpy as np
 from go2_dyn_tube_mpc_msg.msg import Trajectory
 from obelisk_estimator_msgs.msg import EstimatedState
 from obelisk_control_msgs.msg import VelocityCommand
+from go2_nav_msg.msg import NearestPointsMsg
 from nav_msgs.msg import OccupancyGrid, OccupancyGridUpdate
 from sensor_msgs.msg import LaserScan
+import geometry_msgs.msg
 from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 
 from obelisk_py.core.control import ObeliskController
@@ -41,6 +44,7 @@ class DynamicTubeMPCNode(ObeliskController):
         self.received_path = False
         self.received_map = False
         self.update_entire_map = True
+        self.laser_to_odom_transform = self.get_identity_transform("odom", "base_link")
 
         # Load policy
         # self.declare_parameter("tube_path", "")
@@ -101,7 +105,7 @@ class DynamicTubeMPCNode(ObeliskController):
             "sub_nearest_points_setting",
             self.nearest_points_callback,  # type: ignore
             key="sub_nearest_points_key",  # key can be specified here or in the config file
-            msg_type=OccupancyGridUpdate
+            msg_type=NearestPointsMsg
         )
         # Subscriber to laser scan
         self.register_obk_subscription(
@@ -159,17 +163,33 @@ class DynamicTubeMPCNode(ObeliskController):
         # TODO: is it always/ever necessary to reset the warm start?
         # self.dtmpc.reset_warm_start()
 
-    def nearest_points_callback(self, nearest_points_msg: OccupancyGrid):
-        # TODO: update the scan of the DTMPC
-        # Convert the laser scan into the global frame
-
-        nearest_inds = np.array(nearest_points_msg.data).reshape(2, nearest_points_msg.info.width, nearest_points_msg.height)
-        self.dtmpc.update_nearest_inds(nearest_inds)
+    def nearest_points_callback(self, nearest_points_msg: NearestPointsMsg):
+        nearest_inds = np.array(nearest_points_msg.nearest_inds).reshape(2, nearest_points_msg.info.width, nearest_points_msg.height)
+        nearest_dists = np.array(nearest_points_msg.nearest_dists).reshape(nearest_points_msg.info.width, nearest_points_msg.height)
+        map_origin = np.array([nearest_points_msg.pose.x, nearest_points_msg.pose.y])
+        map_theta = nearest_points_msg.pose.theta
+        self.dtmpc.update_nearest_inds(nearest_inds, nearest_dists, map_origin, map_theta)
 
     def laser_scan_callback(self, scan_msg: LaserScan):
-        # TODO: update the scan of the DTMPC
-        # Convert the laser scan into the global frame
-        scan_points = ...
+        # Convert the laser scan into the odom frame
+        try:
+            self.laser_to_odom_transform = self.tf_buffer.lookup_transform("odom", scan_msg.header.frame_id, rospy.Time(0), rospy.Duration(1.0))
+        except tf2_ros.LookupException as e:
+            rospy.logwarn(f"Transform error: {e}")
+        angles = np.linspace(scan_msg.angle_min, scan_msg.angle_max, len(scan_msg.ranges))
+        ranges = np.array(scan_msg.ranges)
+
+        # Convert to Cartesian (laser frame)
+        valid = np.isfinite(ranges)  # Ignore NaN and inf values
+        x_laser = ranges[valid] * np.cos(angles[valid])
+        y_laser = ranges[valid] * np.sin(angles[valid])
+        points_laser = np.vstack((x_laser, y_laser, np.ones_like(x_laser)))  # Homogeneous coordinates
+
+        # Extract transformation matrix
+        H = self.transform_to_matrix(self.laser_to_odom_transform)
+
+        # Transform points to odom frame
+        scan_points = np.dot(H, points_laser)[:2].T  # Extract x, y
         self.dtmpc.update_scan(scan_points)
 
     def vel_lim_callback(self, v_max_msg: VelocityCommand):
@@ -214,6 +234,26 @@ class DynamicTubeMPCNode(ObeliskController):
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
         assert is_in_bound(type(traj_msg), ObeliskControlMsg)
         return traj_msg
+
+    @staticmethod
+    def get_identity_transform(parent_frame, child_frame):
+        identity_transform = geometry_msgs.msg.TransformStamped()
+        identity_transform.header.stamp = rospy.Time.now()
+        identity_transform.header.frame_id = parent_frame
+        identity_transform.child_frame_id = child_frame
+
+        # No translation (x, y, z = 0)
+        identity_transform.transform.translation.x = 0.0
+        identity_transform.transform.translation.y = 0.0
+        identity_transform.transform.translation.z = 0.0
+
+        # Identity quaternion (no rotation)
+        identity_transform.transform.rotation.x = 0.0
+        identity_transform.transform.rotation.y = 0.0
+        identity_transform.transform.rotation.z = 0.0
+        identity_transform.transform.rotation.w = 1.0
+
+        return identity_transform
 
 
 def main(args: Optional[List] = None) -> None:
