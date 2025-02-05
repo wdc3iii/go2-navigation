@@ -2,17 +2,24 @@ import numpy as np
 import heapq
 import random
 from go2_dyn_tube_mpc.map_utils import MapUtils
+from scipy.ndimage import binary_dilation
 
 class Exploration:
 
     def __init__(
-        self, min_frontier_size,
+            self, min_frontier_size=6, robot_radius=0.15,
             front_size_weight=1, front_to_goal_weight=10, start_to_front_weight=1,
-        astar_depth_limit=1000000, frontier_depth_limit=10000,
-        free=0, uncertain=1, occupied=2
+            astar_depth_limit=1000000, frontier_depth_limit=10000,
+            free=0, uncertain=1, occupied=2
     ):
         # Store cells
         self.map = MapUtils(free=free, uncertain=uncertain, occupied=occupied)
+        self.inflated_map = MapUtils(free=free, uncertain=uncertain, occupied=occupied)
+        self.robot_radius = robot_radius
+        y, x = np.ogrid[-robot_radius:robot_radius + 1, -robot_radius:robot_radius + 1]
+        mask = x ** 2 + y ** 2 <= robot_radius ** 2  # Circle equation
+        self.kernel = mask.astype(np.uint8)  # Convert to binary mask
+        # self.kernel = np.ones((2 * self.robot_radius + 1, 2 * self.robot_radius + 1))
         self.FRONTIER_OPEN = 0
         self.FRONTIER_CLOSE = 1
         self.directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]  # Up, Down, Left, Right
@@ -25,15 +32,45 @@ class Exploration:
         self.front_to_goal_weight = front_to_goal_weight
         self.front_size_weight = front_size_weight
 
-    def set_map(self, occ_grid, origin, resolution):
-        self.map.set_map(occ_grid, origin, resolution)
+    def set_map(self, occ_grid, map_origin, resolution):
+        # Set the nominal map
+        self.map.set_map(occ_grid, map_origin, resolution)
+        # Compute the inflated map over the whole space
+        self.inflated_map.set_map(np.ones_like(occ_grid) * self.map.FREE, map_origin, resolution)
+        self.inflate_map((0, 0), self.map.shape)
 
-    def update_map(self, map_update, origin):
-        # TODO: Buffer map by robot diameter for consistency?
-        if self.map is None:
-            self.map = map_update
-        else:
-            self.map[origin[0]:origin[0] + map_update.shape[0], origin[1]:origin[1] + map_update.shape[1]] = map_update
+    def update_origin(self, origin):
+        self.map.set_origin(origin)
+        self.inflated_map.set_origin(origin)
+
+    def update_map(self, occ_grid, origin):
+        x1 = origin[0]
+        x2 = origin[0] + occ_grid.shape[0]
+        y1 = origin[1]
+        y2 = origin[1] + occ_grid.shape[1]
+        self.map[x1:x2, y1:y2] = occ_grid
+        self.inflate_map(origin, occ_grid.shape)
+
+    def inflate_map(self, origin, shape):
+        x1 = max(origin[0] - self.robot_radius, 0)
+        x2 = min(origin[0] + shape[0] - self.robot_radius, self.map.shape[0])
+        y1 = max(origin[1] - self.robot_radius, 0)
+        y2 = min(origin[1] + shape[1] - self.robot_radius, self.map.shape[1])
+
+        local_map = self.map[x1:x2, y1:y2].copy()
+
+        # Inflate uncertain
+        mask_uncertain = local_map == self.map.UNCERTAIN
+        inflated_mask_uncertain = binary_dilation(mask_uncertain, self.kernel)
+        inflated_uncertain_local = np.where(inflated_mask_uncertain, self.map.UNCERTAIN, local_map)
+        # Inflate occupied
+        mask_occupied = local_map == self.map.OCCUPIED
+        inflated_mask_occupied = binary_dilation(mask_occupied, self.kernel)
+
+        self.inflated_map[x1:x2, y1:y2] = np.where(inflated_mask_occupied, self.map.OCCUPIED, inflated_uncertain_local)
+
+    def compute_nearest_inds(self, center, size, free=True):
+        return self.map.get_nearest_inds(center, size, free=free)
 
     @staticmethod
     def heuristic(a, b):
