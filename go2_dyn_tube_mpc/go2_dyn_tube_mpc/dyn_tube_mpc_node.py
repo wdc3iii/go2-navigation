@@ -1,5 +1,6 @@
 from typing import List, Optional
-import rospy
+from rclpy.duration import Duration
+import rclpy
 import tf2_ros
 from rclpy.executors import SingleThreadedExecutor
 from obelisk_py.core.utils.ros import spin_obelisk
@@ -7,7 +8,6 @@ import numpy as np
 from go2_dyn_tube_mpc_msg.msg import Trajectory
 from obelisk_estimator_msgs.msg import EstimatedState
 from obelisk_control_msgs.msg import VelocityCommand
-import tf_transformations
 from grid_map_msgs.msg import GridMap
 from sensor_msgs.msg import LaserScan
 import geometry_msgs.msg
@@ -35,10 +35,6 @@ class DynamicTubeMPCNode(ObeliskController):
         super().__init__(node_name, Trajectory, EstimatedState)
         self.n = 3
         self.m = 3
-        self.px_z = np.zeros((3,))
-        self.px_v = np.zeros((3,))
-        self.z_ref = np.zeros((self.n, self.N + 1))
-        self.v_ref = np.zeros((self.m, self.N))
 
         self.path = None
         self.received_path = False
@@ -46,6 +42,9 @@ class DynamicTubeMPCNode(ObeliskController):
         self.update_entire_map = True
         self.dtmpc_needs_warm_start_reset = True
         self.laser_to_odom_transform = self.get_identity_transform("odom", "base_link")
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Load policy
         # self.declare_parameter("tube_path", "")
@@ -58,9 +57,16 @@ class DynamicTubeMPCNode(ObeliskController):
         # Horizon length, timing
         self.declare_parameter("N", 20)
         self.N = self.get_parameter("N").get_parameter_value().integer_value
+        self.declare_parameter("robot_radius", 0.15)
+        self.robot_radius = self.get_parameter("robot_radius").get_parameter_value().double_value
+        self.N = self.get_parameter("N").get_parameter_value().integer_value
         self.declare_parameter("dt", 0.1)
         self.dt = self.get_parameter("dt").get_parameter_value().double_value
         self.ts = np.arange(0, self.N + 1) * self.dt
+
+        # State variables
+        self.px_z = np.zeros((3,))
+        self.px_v = np.zeros((3,))
 
         # Velocity bounds
         self.declare_parameter("v_max", [0.5, 0.5, 1.0])
@@ -73,17 +79,17 @@ class DynamicTubeMPCNode(ObeliskController):
 
         # Cost matrices
         self.declare_parameter("Q", [1., 1., 0.1])          # State cost
-        Q = np.diag(self.get_parameter("Q").get_parameter_value().double_array_value)
+        Q = np.array(self.get_parameter("Q").get_parameter_value().double_array_value)
         self.declare_parameter("Qf", [10., 10., 10.])       # Terminal Cost
-        Qf = np.diag(self.get_parameter("Qf").get_parameter_value().double_array_value)
+        Qf = np.array(self.get_parameter("Qf").get_parameter_value().double_array_value)
         self.declare_parameter("R", [0.1, 0.1, 0.1])        # Temporal weights on state cost
-        R = np.diag(self.get_parameter("R").get_parameter_value().double_array_value).reshape(self.m, self.m)
+        R = np.array(self.get_parameter("R").get_parameter_value().double_array_value)
         self.declare_parameter("Q_schedule", np.linspace(0, 1, self.N).tolist())    # Schedule on state cost (allow more deviation of trajectory from plan near beginning)
-        Q_sched = np.diag(self.get_parameter("Q_schedule").get_parameter_value().double_array_value)
+        Q_sched = np.array(self.get_parameter("Q_schedule").get_parameter_value().double_array_value)
         self.declare_parameter("Rv_first", [0.1, 0.1, 0.1])      # First order rate penalty on input
-        Rv_first = np.diag(self.get_parameter("Rv_first").get_parameter_value().double_array_value)
+        Rv_first = np.array(self.get_parameter("Rv_first").get_parameter_value().double_array_value)
         self.declare_parameter("Rv_second", [0., 0., 0., 0., 0., 0., 0., 0., 0.])     # Second order rate penalty on input
-        Rv_second = np.diag(self.get_parameter("Rv_second").get_parameter_value().double_array_value)
+        Rv_second = np.array(self.get_parameter("Rv_second").get_parameter_value().double_array_value)
 
         self.dtmpc = DynamicTubeMPC(self.dt, self.N, self.n, self.m, Q, Qf, R, Rv_first, Rv_second, Q_sched, self.v_min_bound, self.v_max_bound, robot_radius=self.robot_radius)
 
@@ -151,7 +157,7 @@ class DynamicTubeMPCNode(ObeliskController):
 
     def plan_callback(self, plan_msg: Trajectory):
         # Accepts a trajectory which is a sequence of waypoints
-        self.dtmpc.set_path = np.array(plan_msg.z).reshape(plan_msg.horizon + 1, plan_msg.n)
+        self.dtmpc.set_path(np.array(plan_msg.z).reshape(plan_msg.horizon + 1, plan_msg.n))
         self.received_path = True
 
         if self.dtmpc_needs_warm_start_reset:
@@ -159,26 +165,32 @@ class DynamicTubeMPCNode(ObeliskController):
             self.dtmpc_needs_warm_start_reset = False
 
     def nearest_points_callback(self, nearest_points_msg: GridMap):
-        data = np.array(
-            nearest_points_msg.data
-        ).reshape(len(nearest_points_msg.layers), nearest_points_msg.info.length_x, nearest_points_msg.info.length_y)
-        nearest_inds = data[1:, :, :]
-        nearest_dists = data[0, :, :]
-        map_origin = np.array([nearest_points_msg.info.pose.x, nearest_points_msg.info.pose.y])
-        _, _, map_theta = tf_transformations.euler_from_quaterion((
-            nearest_points_msg.pose.orientation.x,
-            nearest_points_msg.pose.orientation.y,
-            nearest_points_msg.pose.orientation.z,
-            nearest_points_msg.pose.orientation.w
+        dim0 = nearest_points_msg.data[0].layout.dim
+        nearest_dists = np.array(nearest_points_msg.data[0].data).reshape(dim0[0].size, dim0[1].size)
+        
+        dim1 = nearest_points_msg.data[1].layout.dim
+        dim2 = nearest_points_msg.data[2].layout.dim
+        nearest_inds = np.concatenate((
+            np.array(nearest_points_msg.data[1].data).reshape(1, dim1[0].size, dim1[1].size),
+            np.array(nearest_points_msg.data[2].data).reshape(1, dim2[0].size, dim2[1].size)
+        ), axis=0)
+
+        map_origin = np.array([nearest_points_msg.info.pose.position.x, nearest_points_msg.info.pose.position.y])
+        map_theta = self.quat2yaw((
+            nearest_points_msg.info.pose.orientation.x,
+            nearest_points_msg.info.pose.orientation.y,
+            nearest_points_msg.info.pose.orientation.z,
+            nearest_points_msg.info.pose.orientation.w
         ))
         self.dtmpc.update_nearest_inds(nearest_inds, nearest_dists, map_origin, map_theta)
+        self.received_map = True
 
     def laser_scan_callback(self, scan_msg: LaserScan):
         # Convert the laser scan into the odom frame
         try:
-            self.laser_to_odom_transform = self.tf_buffer.lookup_transform("odom", scan_msg.header.frame_id, rospy.Time(0), rospy.Duration(1.0))
+            self.laser_to_odom_transform = self.tf_buffer.lookup_transform("odom", scan_msg.header.frame_id, rclpy.time.Time(), Duration(seconds=1.0))
         except tf2_ros.LookupException as e:
-            rospy.logwarn(f"Transform error: {e}")
+            self.get_logger().warn(f"Transform error: {e}: odom -> {scan_msg.header.frame_id}")
         angles = np.linspace(scan_msg.angle_min, scan_msg.angle_max, len(scan_msg.ranges))
         ranges = np.array(scan_msg.ranges)
 
@@ -194,6 +206,23 @@ class DynamicTubeMPCNode(ObeliskController):
         # Transform points to odom frame
         scan_points = np.dot(H, points_laser)[:2].T  # Extract x, y
         self.dtmpc.update_scan(scan_points)
+    
+    def transform_to_matrix(self, transform):
+        """Convert a ROS2 TransformStamped into a 3x3 homogeneous transformation matrix (2D)."""
+        translation = transform.transform.translation
+        rotation = transform.transform.rotation
+
+        # Convert quaternion to yaw angle
+        yaw = self.quat2yaw([rotation.x, rotation.y, rotation.z, rotation.w])
+
+        # Construct 2D transformation matrix
+        H = np.array([
+            [np.cos(yaw), -np.sin(yaw), translation.x],
+            [np.sin(yaw),  np.cos(yaw), translation.y],
+            [0, 0, 1]
+        ])
+        
+        return H
 
     def vel_lim_callback(self, v_max_msg: VelocityCommand):
         """Sets the upper bound on velocity limits for the planner"""
@@ -211,7 +240,7 @@ class DynamicTubeMPCNode(ObeliskController):
         qw = quat[3]
         siny_cosp = 2.0 * (qw * qz + qx * qy)
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-        yaw = torch.atan2(siny_cosp, cosy_cosp)
+        yaw = np.arctan2(siny_cosp, cosy_cosp)
         return yaw
 
     def compute_control(self) -> Trajectory:
@@ -222,7 +251,8 @@ class DynamicTubeMPCNode(ObeliskController):
         """
         # Don't plan if we haven't received a path to follow
         traj_msg = Trajectory()
-        if not (self.recieved_path and self.received_map):
+        if not (self.received_path and self.received_map):
+
             return traj_msg
 
         # Solve the MPC
@@ -230,18 +260,17 @@ class DynamicTubeMPCNode(ObeliskController):
 
         # Construct the message
         traj_msg.header.stamp = self.get_clock().now().to_msg()
-        traj_msg.z = z.tolist()
-        traj_msg.v = v.tolist()
-        traj_msg.t = (self.ts + self.get_clock().nanoseconds() / 1e-9).tolist()
+        traj_msg.z = z.flatten().tolist()
+        traj_msg.v = v.flatten().tolist()
+        traj_msg.t = (self.ts + self.get_clock().now().nanoseconds / 1e-9).tolist()
         
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
-        assert is_in_bound(type(traj_msg), ObeliskControlMsg)
+        # assert is_in_bound(type(traj_msg), ObeliskControlMsg)
         return traj_msg
 
-    @staticmethod
-    def get_identity_transform(parent_frame, child_frame):
+    def get_identity_transform(self, parent_frame, child_frame):
         identity_transform = geometry_msgs.msg.TransformStamped()
-        identity_transform.header.stamp = rospy.Time.now()
+        identity_transform.header.stamp = self.get_clock().now().to_msg()
         identity_transform.header.frame_id = parent_frame
         identity_transform.child_frame_id = child_frame
 

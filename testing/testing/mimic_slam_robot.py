@@ -5,7 +5,7 @@ import numpy as np
 import tf2_ros
 import math
 
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Pose2D
 from nav_msgs.msg import OccupancyGrid, MapMetaData
 from map_msgs.msg import OccupancyGridUpdate  # Import the correct message type
 from sensor_msgs.msg import LaserScan
@@ -23,8 +23,9 @@ class FakeSLAMNode(Node):
 
         # Publishers
         self.map_pub = self.create_publisher(OccupancyGrid, '/map', 1)
-        self.map_update_pub = self.create_publisher(OccupancyGridUpdate, '/map_update', 1)
+        self.map_update_pub = self.create_publisher(OccupancyGridUpdate, '/map_updates', 1)
         self.scan_pub = self.create_publisher(LaserScan, '/scan', 1)
+        self.goal_pub = self.create_publisher(Pose2D, '/obelisk/go2/goal_pose', 1)
 
         # TF Broadcasters
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -43,6 +44,7 @@ class FakeSLAMNode(Node):
 
         # Timers
         self.create_timer(1.0, self.publish_map)
+        self.create_timer(1.0, self.publish_goal_pose)
         self.create_timer(0.1, self.publish_scan)
         self.create_timer(0.1, self.publish_tf)
 
@@ -54,13 +56,13 @@ class FakeSLAMNode(Node):
         data[:int(size_y // 5)] = -1
         data[size_y - int(size_y)// 10:] = 100
 
-        y = size_y // 2
-        x = size_x // 2
+        y = size_y // 2 + 25
+        x = size_x // 2 + 25
         data[y-5:y+5, x-5:x+5] = 100
 
         map_msg = OccupancyGrid()
         map_msg.header.frame_id = "map"
-        map_msg.info = MapMetaData()
+        # map_msg.info = MapMetaData()
         map_msg.info.width = size_x
         map_msg.info.height = size_y
         map_msg.info.resolution = resolution
@@ -145,6 +147,13 @@ class FakeSLAMNode(Node):
             self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
         else:
             self.tf_broadcaster.sendTransform([tf_map_odom])
+
+    def publish_goal_pose(self):
+        msg = Pose2D()
+        msg.x = 0.
+        msg.y = 0.
+        msg.theta = 0.
+        self.goal_pub.publish(msg)
 
     def set_trajectory(self, trajectory):
         """Allow user to set a trajectory [(x, y, theta), ...]."""

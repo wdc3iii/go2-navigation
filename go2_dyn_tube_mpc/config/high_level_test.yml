@@ -3,8 +3,8 @@ onboard:
   control:
   # ----- High Level Controller ----- #
     - pkg: go2_dyn_tube_mpc
-      params:
-      executable: high_level_ctrl
+      # params:
+      executable: high_level_planner
       # callback_groups:
       publishers:
         # ----- Path Publisher ----- #
@@ -40,7 +40,7 @@ onboard:
           callback_group: None
         # ----- Map Update Subscriber ----- #
         - ros_parameter: sub_map_update_setting
-          topic: /map_update
+          topic: /map_updates
           history_depth: 10
           callback_group: None
       timers:
@@ -52,7 +52,7 @@ onboard:
           callback_group: None
   # ----- DTMPC ----- #
     - pkg: go2_dyn_tube_mpc
-      executable: dynamic_tube_mpc
+      executable: dyn_tube_mpc
       # callback_groups:
       publishers:
         - ros_parameter: pub_ctrl_setting
@@ -66,6 +66,10 @@ onboard:
           callback_group: None
         - ros_parameter: sub_plan_setting
           topic: /obelisk/go2/a_star_path
+          history_depth: 10
+          callback_group: None
+        - ros_parameter: sub_vel_lim_setting
+          topic: /obelisk/go2/vel_limits
           history_depth: 10
           callback_group: None
         - ros_parameter: sub_nearest_points_setting
@@ -249,7 +253,7 @@ onboard:
           - ros_parameter: timer_viz_joint_setting
             timer_period_sec: 0.01
             callback_group: None
-  joystick:
-    on: True
-    pub_topic: /obelisk/go2/joy
-    sub_topic: /obelisk/go2/joy_feedback
+  # joystick:
+  #   on: True
+  #   pub_topic: /obelisk/go2/joy
+  #   sub_topic: /obelisk/go2/joy_feedback

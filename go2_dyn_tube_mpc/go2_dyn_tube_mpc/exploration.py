@@ -7,7 +7,7 @@ from scipy.ndimage import binary_dilation
 class Exploration:
 
     def __init__(
-            self, min_frontier_size=6, robot_radius=0.15,
+            self, min_frontier_size=6, robot_radius=3,
             front_size_weight=1, front_to_goal_weight=10, start_to_front_weight=1,
             astar_depth_limit=1000000, frontier_depth_limit=10000,
             free=0, uncertain=1, occupied=2
@@ -53,9 +53,9 @@ class Exploration:
 
     def inflate_map(self, origin, shape):
         x1 = max(origin[0] - self.robot_radius, 0)
-        x2 = min(origin[0] + shape[0] - self.robot_radius, self.map.shape[0])
+        x2 = min(origin[0] + shape[0] + self.robot_radius, self.map.shape[0])
         y1 = max(origin[1] - self.robot_radius, 0)
-        y2 = min(origin[1] + shape[1] - self.robot_radius, self.map.shape[1])
+        y2 = min(origin[1] + shape[1] + self.robot_radius, self.map.shape[1])
 
         local_map = self.map[x1:x2, y1:y2].copy()
 
@@ -79,26 +79,29 @@ class Exploration:
 
     def get_neighbors(self, node, all_dir=False):
         neighbors = []
-        rows, cols = self.map.shape
+        rows, cols = self.inflated_map.shape
         directions = self.all_directions if all_dir else self.directions
         random.shuffle(directions)
         for dr, dc in directions:
             r, c = node[0] + dr, node[1] + dc
             if 0 <= r < rows and 0 <= c < cols:
-                if self.map[r, c] == self.map.FREE:  # Check bounds and obstacles
-                    neighbors.append(((r, c), self.map.FREE))
-                elif self.map[r, c] == self.map.UNCERTAIN:
-                    neighbors.append(((r, c), self.map.UNCERTAIN))
+                if self.inflated_map[r, c] == self.inflated_map.FREE:  # Check bounds and obstacles
+                    neighbors.append(((r, c), self.inflated_map.FREE))
+                elif self.inflated_map[r, c] == self.inflated_map.UNCERTAIN:
+                    neighbors.append(((r, c), self.inflated_map.UNCERTAIN))
         return neighbors
 
-    def find_frontiers_to_goal(self, start_node, goal_node, find_frontiers=True):
-        assert self.map[start_node] == self.map.FREE
+    def find_frontiers_to_goal(self, start_pose, goal_pose, find_frontiers=True):
+        start_node = self.map.pose_to_map(start_pose)
+        goal_node = self.map.pose_to_map(goal_pose)
+        if self.inflated_map[start_node] != self.inflated_map.FREE:
+            return None, None, None
         frontier_closed_list = []       # Mark cells which have been explored in frontier exploration
         frontiers = []                  # Store all frontiers
 
         open_set = []                   # Set of all nodes to be explored by astar
-        heapq.heappush(open_set, (0, start_node, self.map.FREE))
-        came_from = {}                  # Linked list storing shortest path to each node
+        heapq.heappush(open_set, (0, start_node, self.inflated_map.FREE))
+        came_from = {}                  # Linked list storing the shortest path to each node
         g_score = {start_node: 0}       # Stage cost
         f_score = {start_node: self.heuristic(start_node, goal_node)}  # Heuristic cost to go
         path_to_goal = None
@@ -122,7 +125,7 @@ class Exploration:
                 break
 
             # Continue Astar searching
-            elif curr_occ == self.map.FREE:
+            elif curr_occ == self.inflated_map.FREE:
                 # Get neighbors of the node
                 neighbors = self.get_neighbors(curr_node)
                 is_frontier = False
@@ -131,13 +134,13 @@ class Exploration:
                     tentative_g_score = g_score[curr_node] + 1
 
                     # If node is unexplored, or shorter path found, and node free, queue it
-                    if (neighbor not in g_score or tentative_g_score < g_score[neighbor]) and occ == self.map.FREE:
+                    if (neighbor not in g_score or tentative_g_score < g_score[neighbor]) and occ == self.inflated_map.FREE:
                         came_from[neighbor] = curr_node
                         g_score[neighbor] = tentative_g_score
                         f_score[neighbor] = tentative_g_score + self.heuristic(neighbor, goal_node)
                         heapq.heappush(open_set, (f_score[neighbor], neighbor, occ))
                     # If node is uncertain and frontiers have not yet been explored for parent, run frontier algo
-                    elif (not is_frontier) and find_frontiers and occ == self.map.UNCERTAIN:
+                    elif (not is_frontier) and find_frontiers and occ == self.inflated_map.UNCERTAIN:
                         # This is a frontier node!! Depth-limited BFS for frontier nodes
                         frontier = []
                         frontier_queue = [curr_node]
@@ -145,14 +148,14 @@ class Exploration:
                         while frontier_queue and frontiers_expanded < self.frontier_depth_limit:
                             f_node = frontier_queue.pop(0)
                             frontiers_expanded += 1
-                            if f_node in frontier_closed_list or self.map[f_node] != self.map.FREE:
+                            if f_node in frontier_closed_list or self.inflated_map[f_node] != self.inflated_map.FREE:
                                 continue
                             # get all neighbors
                             neighbors = self.get_neighbors(f_node, all_dir=True)
                             # Add f_node to frontier if it has a free neighbor
                             added_frontier = False
                             for i in range(len(neighbors)):
-                                if neighbors[i][1] == self.map.UNCERTAIN:
+                                if neighbors[i][1] == self.inflated_map.UNCERTAIN:
                                     frontier.append(f_node)
                                     added_frontier = True
                                     break
@@ -160,7 +163,7 @@ class Exploration:
                                 for i in range(len(neighbors)):
                                     if neighbors[i][0] in frontier_queue \
                                             or neighbors[i][0]in frontier_closed_list \
-                                            or self.map[neighbors[i][0]] != self.map.FREE:
+                                            or self.inflated_map[neighbors[i][0]] != self.inflated_map.FREE:
                                         continue
                                     frontier_queue.append(neighbors[i][0])
                             frontier_closed_list.append(f_node)
@@ -173,7 +176,9 @@ class Exploration:
             print("Warning: A* search depth limit exceeded")
         if path_to_goal is None:
             path_to_front, cost_to_front = self.select_intermediate_goal(frontiers, start_node, goal_node)
+            path_to_front = self.map.map_to_pose(path_to_front)
             return path_to_front, cost_to_front, frontiers
+        path_to_goal = self.map.map_to_pose(path_to_goal)
         if find_frontiers:
             return path_to_goal, cost_to_goal, frontiers
         return path_to_goal, cost_to_goal

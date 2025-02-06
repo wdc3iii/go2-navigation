@@ -15,6 +15,8 @@ def map_to_pose(map_inds, map_origin, map_theta, resolution):
 
 
 def pose_to_map(pose, map_origin, map_theta, resolution):
+    if len(pose.shape) == 2 and pose.shape[1] == 3:
+        pose = pose[:, :2]
     rel_pose = pose - map_origin
     Rinv = np.array([
         [np.cos(map_theta), np.sin(map_theta)],
@@ -101,8 +103,8 @@ class MapUtils:
             input_im = np.logical_not(input_im)
         nearest_dists, nearest_inds = distance_transform_edt(input_im, return_indices=True)
 
-        dx = x1 * self.map_resolution
-        dy = y1 * self.map_resolution
+        dx = x1 * self.resolution
+        dy = y1 * self.resolution
         sub_map_p = self.map_origin + np.array([
             dx * np.cos(self.map_theta) - dy * np.sin(self.map_theta),
             dx * np.sin(self.map_theta) + dy * np.cos(self.map_theta),

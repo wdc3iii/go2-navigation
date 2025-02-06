@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from go2_dyn_tube_mpc.exploration import Exploration
 import time
 
+visualize = True
+
 if __name__ == "__main__":
     # Create DTMPC
     N = 20
@@ -11,6 +13,7 @@ if __name__ == "__main__":
     m = 3
     dt = 0.1
     res = 0.05
+    robot_radius = 0.15
     v_max = np.array([0.5, 0.5, 1.5])
     v_min = np.array([-0.1, -0.5, -1.5])
     Q = np.array([1., 1., 0.1])
@@ -20,7 +23,7 @@ if __name__ == "__main__":
     Rv_first = np.array([0., 0., 0.])
     Rv_second = np.array([0., 0., 0.])
 
-    dtmpc = DynamicTubeMPC(dt, N, n, m, Q, Qf, R, Rv_first, Rv_second, Q_sched, v_min, v_max, robot_radius=0.15, obs_constraint_method="Constraint")
+    dtmpc = DynamicTubeMPC(dt, N, n, m, Q, Qf, R, Rv_first, Rv_second, Q_sched, v_min, v_max, robot_radius=robot_radius, obs_constraint_method="Constraint")
     dtmpc.set_input_bounds(v_min, v_max)
     # Create problem
     occ_grid = np.zeros((41, 41))
@@ -53,7 +56,6 @@ if __name__ == "__main__":
         # [0.9, 0.9],
     ])
 
-    dtmpc.set_map(occ_grid, np.zeros((3,)), res)
     dtmpc.update_scan(scan)
 
     z_i = np.array([0.3, 0.3, 0.])
@@ -61,39 +63,37 @@ if __name__ == "__main__":
     z_f = np.array([1.8, 1.8, 0.])
 
     # Create graph solve
-    explorer = Exploration(3, free=0, uncertain=1, occupied=2)
-    explorer.set_map(occ_grid, (0, 0), res)
+    explorer = Exploration(3, robot_radius=round(robot_radius / res), free=0, uncertain=1, occupied=2)
+    explorer.set_map(occ_grid, (0, 0, 0), res)
 
-    start = dtmpc.map.pose_to_map(z_i[:2])
-    goal = dtmpc.map.pose_to_map(z_f[:2])
+    start = explorer.map.pose_to_map(z_i[:2])
+    goal = explorer.map.pose_to_map(z_f[:2])
     path, dist, frontiers = explorer.find_frontiers_to_goal(start, goal)
-    dtmpc.set_path(path)
-    path_t = dtmpc.map.map_to_pose(np.array(path))
+    path_t = explorer.map.map_to_pose(np.array(path))
+    dtmpc.set_path(path_t)
+
+    nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = explorer.compute_nearest_inds(z_i[:2], 30)
+    dtmpc.update_nearest_inds(nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw)
 
     dtmpc.reset_warm_start()
     z_all = []
     v_all = []
-    for _ in range(100):
+    for _ in range(125):
+        nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = explorer.compute_nearest_inds(dtmpc.z0[:2], 30)
+        dtmpc.update_nearest_inds(nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw)
         z_sol, v_sol = dtmpc.solve()
-        # _, ax = plt.subplots(1, 2)
-        # ax[0].plot(np.arange(dtmpc.N + 1) * dtmpc.dt, z_sol)
-        # ax[0].plot(np.arange(dtmpc.N + 1) * dtmpc.dt, dtmpc.z_ref, '--')
-        # ax[0].legend(['x', 'y', 'yaw', 'xd', 'yd', 'yawd'])
-        #
-        # ax[1].plot(np.arange(dtmpc.N) * dtmpc.dt, v_sol)
-        # ax[1].plot(np.arange(dtmpc.N ) * dtmpc.dt, dtmpc.v_ref, '--')
-        # ax[1].legend(['vx', 'vy', 'wz', 'vxd', 'vyd', 'wzd'])
-        # plt.show()
         z_all.append(z_sol[0])
         v_all.append(v_sol[0])
 
-        fig, ax = plt.subplots()
-        dtmpc.map.plot(ax=ax)
-        plt.plot(path_t[:, 0] / dtmpc.map.resolution, path_t[:, 1] / dtmpc.map.resolution, 'r')
-        plt.plot(z_sol[:, 0] / dtmpc.map.resolution, z_sol[:, 1] / dtmpc.map.resolution, '.-b')
-        plt.show()
+        if visualize:
+            fig, ax = plt.subplots()
+            explorer.map.plot(ax=ax)
+            plt.plot(path_t[:, 0], path_t[:, 1], 'r')
+            plt.plot(z_sol[:, 0], z_sol[:, 1], '.-b')
+            plt.show()
+            time.sleep(0.1)
+
         dtmpc.set_initial_condition(z_sol[1])
-        time.sleep(0.1)
 
     # Plot everything
     z_all = np.array(z_all)
@@ -109,7 +109,7 @@ if __name__ == "__main__":
     plt.show()
 
     fig, ax = plt.subplots()
-    dtmpc.map.plot(ax=ax)
-    plt.plot(path_t[:, 0] / dtmpc.map.resolution, path_t[:, 1] / dtmpc.map.resolution, 'r')
-    plt.plot(z_all[:, 0] / dtmpc.map.resolution, z_all[:, 1] / dtmpc.map.resolution, '.-b')
+    explorer.map.plot(ax=ax)
+    plt.plot(path_t[:, 0], path_t[:, 1], 'r')
+    plt.plot(z_all[:, 0], z_all[:, 1], '.-b')
     plt.show()
