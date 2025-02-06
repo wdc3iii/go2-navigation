@@ -15,11 +15,12 @@ from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
 from go2_dyn_tube_mpc.exploration import Exploration
-from geometry_msgs.msg import Pose2D
+from geometry_msgs.msg import Pose2D, Point
 from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import OccupancyGrid
 from map_msgs.msg import OccupancyGridUpdate
-from std_msgs.msg import Float32MultiArray, MultiArrayLayout, MultiArrayDimension
+from std_msgs.msg import Float32MultiArray, MultiArrayLayout, MultiArrayDimension, ColorRGBA
+from visualization_msgs.msg import Marker
 
 
 class HighLevelPlannerNode(ObeliskController):
@@ -92,6 +93,11 @@ class HighLevelPlannerNode(ObeliskController):
             "pub_nearest_points_setting",
             key="pub_nearest_points_key",  # key can be specified here or in the config file
             msg_type=GridMap
+        )
+        self.register_obk_publisher(
+            "pub_viz_setting",
+            key="pub_viz_key",  # key can be specified here or in the config file
+            msg_type=Marker
         )
         self.register_obk_timer(
             "timer_nearest_pts_setting",
@@ -181,9 +187,10 @@ class HighLevelPlannerNode(ObeliskController):
         nearest_point_msg.info.length_y = nearest_dists.shape[1] * self.explorer.map.resolution
         # Convert origin and yaw to odom frame
         sub_map_odom_origin = np.array([
-            np.cos(sub_map_yaw - self.map_to_odom_yaw) + np.sin(sub_map_yaw - self.map_to_odom_yaw),
-            -np.sin(sub_map_yaw - self.map_to_odom_yaw) + np.cos(sub_map_yaw - self.map_to_odom_yaw),
-        ]) * (sub_map_origin - self.map_to_odom_p)
+            [np.cos(sub_map_yaw - self.map_to_odom_yaw), np.sin(sub_map_yaw - self.map_to_odom_yaw)],
+            [-np.sin(sub_map_yaw - self.map_to_odom_yaw), np.cos(sub_map_yaw - self.map_to_odom_yaw)],
+        ]) @ (sub_map_origin - self.map_to_odom_p)
+
         nearest_point_msg.info.pose.position.x = sub_map_odom_origin[0]
         nearest_point_msg.info.pose.position.y = sub_map_odom_origin[1]
         quat = self.yaw2quat(sub_map_yaw - self.map_to_odom_yaw)
@@ -264,17 +271,58 @@ class HighLevelPlannerNode(ObeliskController):
             self.get_logger().info("High Level Plan began in occupied space!")
         # TODO: decide whether to follow path in Dynamic or Mapping mode
 
+        try:
+            # Get transform from odom to robot frame
+            map_to_odom = self.tf_buffer.lookup_transform("map", "odom", rclpy.time.Time(), Duration(seconds=10.0))
+
+            # Extract robot pose in odom
+            self.map_to_odom_p = np.array([
+                map_to_odom.transform.translation.x, map_to_odom.transform.translation.y
+            ])
+            self.map_to_odom_yaw = self.quat2yaw([map_to_odom.transform.rotation.x, map_to_odom.transform.rotation.y, map_to_odom.transform.rotation.z, map_to_odom.transform.rotation.w])
+        except tf2_ros.LookupException as e:
+            self.get_logger().warm(f"Transform error: {e}")
+            return
+        path = (np.array([
+            [np.cos(self.map_to_odom_yaw), np.sin(self.map_to_odom_yaw)],
+            [-np.sin(self.map_to_odom_yaw), np.cos(self.map_to_odom_yaw)],
+        ]) @ (path - self.map_to_odom_p).T).T
         # setting the message (geometric only path)
         # TODO: should add desired orientation, at least at goal...
         # TODO: publish map in odom frame
+        msg_time = self.get_clock().now()
         traj_msg = Trajectory()
-        traj_msg.header.stamp = self.get_clock().now().to_msg()
+        traj_msg.header.stamp = msg_time.to_msg()
         traj_msg.horizon = path.shape[0] - 1
         traj_msg.n = path.shape[1]
         traj_msg.m = 0
         traj_msg.z = np.array(path).flatten().tolist()
 
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
+
+        # Publish message for viz
+        viz_msg = Marker()
+        viz_msg.header.stamp = msg_time.to_msg()
+        viz_msg.header.frame_id = 'odom'
+        viz_msg.type = Marker.LINE_STRIP
+        viz_msg.ns = "high_level_planning"
+        viz_msg.action = Marker.ADD
+        viz_msg.scale.x = 0.02
+        viz_msg.scale.y = 0.02
+        viz_msg.scale.z = 0.02
+        for i in range(path.shape[0]):
+            point = Point()
+            point.x = path[i, 0]
+            point.y = path[i, 1]
+            viz_msg.points.append(point)
+            color = ColorRGBA()
+            color.a = 1.
+            color.r = 1.
+            color.b = 0.
+            color.g = 0.
+            viz_msg.colors.append(color)
+
+        self.obk_publishers["pub_viz_key"].publish(viz_msg)
         # assert is_in_bound(type(traj_msg), ObeliskControlMsg)
         return traj_msg
 

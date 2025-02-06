@@ -12,7 +12,9 @@ from grid_map_msgs.msg import GridMap
 from sensor_msgs.msg import LaserScan
 import geometry_msgs.msg
 from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
-
+from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point
+from std_msgs.msg import ColorRGBA
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
@@ -120,6 +122,11 @@ class DynamicTubeMPCNode(ObeliskController):
             self.laser_scan_callback,  # type: ignore
             key="sub_scan_key",  # key can be specified here or in the config file
             msg_type=LaserScan
+        )
+        self.register_obk_publisher(
+            "pub_viz_setting",
+            key="pub_viz_key",  # key can be specified here or in the config file
+            msg_type=Marker
         )
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
@@ -258,13 +265,39 @@ class DynamicTubeMPCNode(ObeliskController):
         # Solve the MPC
         z, v = self.dtmpc.solve()
 
+
         # Construct the message
-        traj_msg.header.stamp = self.get_clock().now().to_msg()
+        msg_time = self.get_clock().now()
+        traj_msg.header.stamp = msg_time.to_msg()
         traj_msg.z = z.flatten().tolist()
         traj_msg.v = v.flatten().tolist()
-        traj_msg.t = (self.ts + self.get_clock().now().nanoseconds / 1e-9).tolist()
+        traj_msg.t = (self.ts + msg_time.nanoseconds / 1e-9).tolist()
         
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
+
+        # Publish message for viz
+        viz_msg = Marker()
+        viz_msg.header.stamp = msg_time.to_msg()
+        viz_msg.header.frame_id = 'odom'
+        viz_msg.ns = "dynamic_tube_mpc"
+        viz_msg.type = Marker.LINE_STRIP
+        viz_msg.action = Marker.ADD
+        viz_msg.scale.x = 0.02
+        viz_msg.scale.y = 0.02
+        viz_msg.scale.z = 0.02
+        for i in range(z.shape[0]):
+            point = Point()
+            point.x = z[i, 0]
+            point.y = z[i, 1]
+            viz_msg.points.append(point)
+            color = ColorRGBA()
+            color.a = 1.
+            color.r = 0.
+            color.b = (z.shape[0] - 1 - i) / (z.shape[0] - 1)
+            color.g = i / (z.shape[0] - 1)
+            viz_msg.colors.append(color)
+
+        self.obk_publishers["pub_viz_key"].publish(viz_msg)
         # assert is_in_bound(type(traj_msg), ObeliskControlMsg)
         return traj_msg
 

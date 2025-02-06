@@ -89,7 +89,7 @@ class FakeSLAMNode(Node):
         # Generate a random update in this region
         update.data = np.random.choice([0, 100, -1], update.width * update.height, p=[0.7, 0.2, 0.1]).tolist()
         
-        self.map_update_pub.publish(update)
+        # self.map_update_pub.publish(update)
 
     def publish_scan(self):
         """Publish a fake LIDAR scan."""
@@ -119,9 +119,9 @@ class FakeSLAMNode(Node):
 
         # Introduce Drift in map -> odom
         drift_rate = self.get_parameter('drift_rate').value
-        self.map_to_odom_x += drift_rate * 0.1
-        self.map_to_odom_y += drift_rate * 0.05
-        self.map_to_odom_theta += drift_rate * 0.01
+        self.map_to_odom_x += drift_rate * 0.5
+        self.map_to_odom_y += drift_rate * 0.25
+        self.map_to_odom_theta += drift_rate * 1.00
 
         tf_map_odom = TransformStamped()
         tf_map_odom.header.stamp = now
@@ -150,9 +150,9 @@ class FakeSLAMNode(Node):
 
     def publish_goal_pose(self):
         msg = Pose2D()
-        msg.x = 0.
-        msg.y = 0.
-        msg.theta = 0.
+        msg.x = 2.
+        msg.y = 2.
+        msg.theta = np.pi / 4
         self.goal_pub.publish(msg)
 
     def set_trajectory(self, trajectory):

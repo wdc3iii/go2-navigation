@@ -22,6 +22,11 @@ onboard:
           topic: /obelisk/go2/nearest_points
           history_depth: 10
           callback_group: None
+        # ----- Visualization Publisher ----- #
+        - ros_parameter: pub_viz_setting
+          topic: /obelisk/go2/a_star_viz
+          history_depth: 10
+          callback_group: None
       subscribers:
         # ----- Estimated State Subscriber ----- #
         - ros_parameter: sub_est_setting
@@ -57,6 +62,11 @@ onboard:
       publishers:
         - ros_parameter: pub_ctrl_setting
           topic: /obelisk/go2/dtmpc_path
+          history_depth: 10
+          callback_group: None
+        # ----- Visualization Publisher ----- #
+        - ros_parameter: pub_viz_setting
+          topic: /obelisk/go2/dtmpc_viz
           history_depth: 10
           callback_group: None
       subscribers:
