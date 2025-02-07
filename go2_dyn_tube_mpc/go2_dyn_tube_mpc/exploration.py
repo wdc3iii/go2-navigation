@@ -10,7 +10,7 @@ class Exploration:
             self, min_frontier_size=6, robot_radius=3,
             front_size_weight=1, front_to_goal_weight=10, start_to_front_weight=1,
             astar_depth_limit=1000000, frontier_depth_limit=10000,
-            free=0, uncertain=1, occupied=2
+            free=0, uncertain=-1, occupied=100
     ):
         # Store cells
         self.map = MapUtils(free=free, uncertain=uncertain, occupied=occupied)
@@ -45,9 +45,9 @@ class Exploration:
 
     def update_map(self, occ_grid, origin):
         x1 = origin[0]
-        x2 = origin[0] + occ_grid.shape[0]
+        x2 = origin[0] + occ_grid.shape[1]
         y1 = origin[1]
-        y2 = origin[1] + occ_grid.shape[1]
+        y2 = origin[1] + occ_grid.shape[0]
         self.map[x1:x2, y1:y2] = occ_grid
         self.inflate_map(origin, occ_grid.shape)
 
@@ -92,8 +92,15 @@ class Exploration:
         return neighbors
 
     def find_frontiers_to_goal(self, start_pose, goal_pose, find_frontiers=True):
-        start_node = self.map.pose_to_map(start_pose)
-        goal_node = self.map.pose_to_map(goal_pose)
+        if isinstance(start_pose, tuple):
+            start_node = start_pose
+        else:
+            start_node = self.map.pose_to_map(start_pose)
+        if isinstance(goal_pose, tuple):
+            goal_node = goal_pose
+        else:
+            goal_node = self.map.pose_to_map(goal_pose)
+        
         if self.inflated_map[start_node] != self.inflated_map.FREE:
             return None, None, None
         frontier_closed_list = []       # Mark cells which have been explored in frontier exploration
@@ -176,7 +183,6 @@ class Exploration:
             print("Warning: A* search depth limit exceeded")
         if path_to_goal is None:
             path_to_front, cost_to_front = self.select_intermediate_goal(frontiers, start_node, goal_node)
-            path_to_front = self.map.map_to_pose(path_to_front)
             return path_to_front, cost_to_front, frontiers
         path_to_goal = self.map.map_to_pose(path_to_goal)
         if find_frontiers:
@@ -186,7 +192,6 @@ class Exploration:
     def select_intermediate_goal(self, frontiers, start_node, goal_node):
         min_front_score = np.inf
         min_front = None
-
         for front, cost_to_front in frontiers:
             front_size = len(front)
             front_to_goal = self.heuristic(np.mean(np.array(front), axis=0), goal_node)

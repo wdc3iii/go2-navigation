@@ -1,23 +1,28 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.time import Time
 import numpy as np
 import tf2_ros
 import math
+import random
+from scipy.ndimage import zoom
 
 from geometry_msgs.msg import TransformStamped, Pose2D
-from nav_msgs.msg import OccupancyGrid, MapMetaData
+from nav_msgs.msg import OccupancyGrid
 from map_msgs.msg import OccupancyGridUpdate  # Import the correct message type
 from sensor_msgs.msg import LaserScan
 from go2_dyn_tube_mpc_msg.msg import Trajectory
 
+from go2_dyn_tube_mpc.map_utils import pose_to_map
+FREE = 0
+UNCERTAIN = -1
+OCCUPIED = 100
 
 class FakeSLAMNode(Node):
     def __init__(self):
         super().__init__('fake_slam')
 
         # Parameters
-        self.declare_parameter('map_size', [200, 200])  # Grid size
+        self.declare_parameter('map_size', [400, 1000])  # Grid size
         self.declare_parameter('resolution', 0.05)  # Map resolution
         self.declare_parameter('scan_range', 2.0)  # LIDAR range
         self.declare_parameter('scan_resolution', 0.1)  # Scan angle step
@@ -33,20 +38,23 @@ class FakeSLAMNode(Node):
 
         # TF Broadcasters
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        # TF Offsets
+        self.map_to_odom_x = 0.0
+        self.map_to_odom_y = 0.0
+        self.map_to_odom_theta = 0.0
 
         # Simulated Map
-        self.map = self.generate_fake_map()
+        size_y, size_x = self.get_parameter('map_size').value
+        res = self.get_parameter('resolution').value
+        dx = size_x * res / 2
+        dy = size_y * res / 2
+        self.map_origin = np.array([-dx, -dy])
+        self.z = np.array((-dx + 2., -dy + 2., 0.))
+        self.generate_fake_map()
 
         # Ground Truth Trajectory
         self.trajectory = []
         self.current_index = 0
-
-        self.z = np.zeros((3,))
-
-        # TF Offsets
-        self.map_to_odom_x = 0.0
-        self.map_to_odom_y = 0.0
-        self.map_to_odom_theta = 2.0
 
         # Timers
         self.create_timer(1.0, self.publish_map)
@@ -54,48 +62,75 @@ class FakeSLAMNode(Node):
         self.create_timer(0.1, self.publish_scan)
         self.create_timer(0.1, self.publish_tf)
 
+    def generate_maze(self, width, height):
+        """Generate a maze using recursive backtracking algorithm."""
+        maze = np.ones((height, width), dtype=int) * OCCUPIED
+
+        def carve_passages_from(x, y):
+            """Recursive function to carve the maze."""
+            directions = [(0, 2), (2, 0), (0, -2), (-2, 0)]
+            random.shuffle(directions)
+
+            for dx, dy in directions:
+                nx, ny = x + dx, y + dy
+
+                if 0 < nx < width-1 and 0 < ny < height-1 and maze[ny, nx] == OCCUPIED:
+                    maze[y + dy // 2, x + dx // 2] = FREE  # Remove wall
+                    maze[ny, nx] = FREE  # Mark passage
+                    carve_passages_from(nx, ny)
+
+        # Start at a random point in the maze
+        start_x, start_y = (random.randrange(1, width, 2), random.randrange(1, height, 2))
+        maze[start_y, start_x] = FREE
+        carve_passages_from(start_x, start_y)
+
+        return maze
+
     def generate_fake_map(self):
         """Generate a simple occupancy grid."""
         size_x, size_y = self.get_parameter('map_size').value
-        resolution = self.get_parameter('resolution').value
-        data = np.zeros((size_y, size_x))
-        data[:int(size_y // 5)] = -1
-        data[size_y - int(size_y)// 10:] = 100
-
-        y = size_y // 2 + 25
-        x = size_x // 2 + 25
-        data[y-5:y+5, x-5:x+5] = 100
-
-        map_msg = OccupancyGrid()
-        map_msg.header.frame_id = "map"
-        # map_msg.info = MapMetaData()
-        map_msg.info.width = size_x
-        map_msg.info.height = size_y
-        map_msg.info.resolution = resolution
-        map_msg.info.origin.position.x = -size_x * resolution / 2
-        map_msg.info.origin.position.y = -size_y * resolution / 2
-        map_msg.data = data.flatten().astype(int).tolist()
-
-        return map_msg
+        self.occ_gt = zoom(self.generate_maze(size_y // 40, size_x // 40), 40, order=0)
+        self.map = np.ones_like(self.occ_gt) * UNCERTAIN
+        # self.map = self.occ_gt.copy()
+        self.sense()
 
     def publish_map(self):
         """Publish the full map periodically."""
-        self.map.header.stamp = self.get_clock().now().to_msg()
-        self.map_pub.publish(self.map)
+        map_msg = OccupancyGrid()
+        map_msg.header.frame_id = "map"
+        size_y, size_x = self.get_parameter('map_size').value
+        resolution = self.get_parameter('resolution').value
+        map_msg.info.width = size_x
+        map_msg.info.height = size_y
+        map_msg.info.resolution = resolution
+        map_msg.info.origin.position.x = self.map_origin[0] + self.map_to_odom_x
+        map_msg.info.origin.position.y = self.map_origin[1] + self.map_to_odom_y
+        map_msg.info.origin.orientation.w = np.cos(self.map_to_odom_theta / 2)
+        map_msg.info.origin.orientation.z = np.sin(self.map_to_odom_theta / 2)
+        map_msg.data = self.map.flatten().astype(int).tolist()
+        self.map_pub.publish(map_msg)
 
-        # Simulate small updates in a sub-region
+    def sense(self):
+        x_c, y_c = pose_to_map(self.z[:2], self.map_origin + np.array([self.map_to_odom_x, self.map_to_odom_y]), self.map_to_odom_theta, self.get_parameter('resolution').value)
+        
+        x1 = max(0, x_c - 25)
+        x2 = min(self.get_parameter("map_size").value[1], x_c + 25)
+        y1 = max(0, y_c - 30)
+        y2 = min(self.get_parameter("map_size").value[1], y_c + 30)
+
         update = OccupancyGridUpdate()
         update.header.stamp = self.get_clock().now().to_msg()
         update.header.frame_id = "map"
-        update.width = 10  # Small update region
-        update.height = 10
-        update.x = np.random.randint(0, self.map.info.width - update.width)
-        update.y = np.random.randint(0, self.map.info.height - update.height)
+        update.width = int(x2 - x1)
+        update.height = int(y2 - y1)
+        update.x = int(x1)
+        update.y = int(y1)
         
         # Generate a random update in this region
-        update.data = np.random.choice([0, 100, -1], update.width * update.height, p=[0.7, 0.2, 0.1]).tolist()
-        
-        # self.map_update_pub.publish(update)
+        update.data = self.occ_gt[y1:y2, x1:x2].flatten().astype(int).tolist()
+        self.map[y1:y2, x1:x2] = self.occ_gt[y1:y2, x1:x2]
+
+        self.map_update_pub.publish(update)
 
     def publish_scan(self):
         """Publish a fake LIDAR scan."""
@@ -129,6 +164,7 @@ class FakeSLAMNode(Node):
             v0[0] * np.sin(self.z[2]) + v0[1] * np.cos(self.z[2]),
             v0[2]
         ]) * (t[1] - t[0])
+        self.sense()
 
     def publish_tf(self):
         """Publish TF transforms with drift in map->odom."""
@@ -136,9 +172,9 @@ class FakeSLAMNode(Node):
 
         # Introduce Drift in map -> odom
         drift_rate = self.get_parameter('drift_rate').value
-        self.map_to_odom_x += drift_rate * 0.25
-        self.map_to_odom_y += drift_rate * 0.125
-        self.map_to_odom_theta += drift_rate * .3
+        self.map_to_odom_x += drift_rate * 0.
+        self.map_to_odom_y += drift_rate * 0.
+        self.map_to_odom_theta += drift_rate * 0.
 
         tf_map_odom = TransformStamped()
         tf_map_odom.header.stamp = now

@@ -71,7 +71,7 @@ class DynamicTubeMPCNode(ObeliskController):
         self.px_v = np.zeros((3,))
 
         # Velocity bounds
-        self.declare_parameter("v_max", [0.5, 0.5, 1.0])
+        self.declare_parameter("v_max", [1.0, 0.5, 1.0])
         self.v_max_bound = np.array(self.get_parameter("v_max").get_parameter_value().double_array_value)
         self.declare_parameter("v_min", [-0.1, -0.5, -1.0])
         self.v_min_bound = np.array(self.get_parameter("v_min").get_parameter_value().double_array_value)

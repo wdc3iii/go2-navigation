@@ -45,7 +45,7 @@ class HighLevelPlannerNode(ObeliskController):
         self.declare_parameter("min_frontier_size", 5)
         self.explorer = Exploration(
             min_frontier_size=self.get_parameter("min_frontier_size").get_parameter_value().integer_value,
-            free=0, uncertain=1, occupied=100
+            free=0, uncertain=-1, occupied=100
         )
 
         # Velocity bounds
@@ -152,6 +152,7 @@ class HighLevelPlannerNode(ObeliskController):
             self.update_entire_map = True
             return
         update_occ = np.array(map_update_msg.data, dtype=np.int8).reshape(h, w)
+        # self.explorer.update_map(update_occ, (x, y))
         self.explorer.update_map(update_occ, (x, y))
 
     def pub_nearest_points_callback(self):
