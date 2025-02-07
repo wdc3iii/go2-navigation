@@ -83,6 +83,33 @@ class DynamicTubeMPC:
                          ubx=self.ubx()
         )
         z, v = self.extract_solution(sol)
+        
+
+        # # TODO: Debugging
+        # with open("debugging_dtmpc.csv", 'w') as f:
+        #     data = [
+        #         ['Q', *self.Q.flatten().tolist()],
+        #         ['Qf', *self.Qf.flatten().tolist()],
+        #         ['Q_heading', self.Q_heading],
+        #         ['Qf_heading', self.Qf_heading],
+        #         ['R', *self.Q.flatten().flatten().tolist()],
+        #         ['Rv_f', *self.Rv_f.flatten().tolist()],
+        #         ['Rv_s', *self.Rv_s.flatten().tolist()],
+        #         ['Q_sched', *self.Q_sched.flatten().tolist()],
+        #         ['vmin', *self.v_min.flatten().tolist()],
+        #         ['vmax', *self.v_max.flatten().tolist()],
+        #         ['zref', *self.z_ref.flatten().tolist()],
+        #         ['vref', *self.v_ref.flatten().tolist()],
+        #         ['z0', *self.z0.flatten().tolist()],
+        #         ['z_warm', *self.z_warm.flatten().tolist()],
+        #         ['v_warm', *self.v_warm.flatten().tolist()],
+        #         ['z', *z.flatten().tolist()],
+        #         ['v', *v.flatten().tolist()]
+        #     ]
+        #     import csv
+        #     writer = csv.writer(f)
+        #     writer.writerows(data)
+        
         self.z_warm = z.copy()
         self.v_warm = v.copy()
         return z, v
@@ -194,7 +221,10 @@ class DynamicTubeMPC:
         self.z_ref = np.hstack([interp_x[:, None], interp_y[:, None], np.insert(headings, -1, headings[-1])[:, None]])
         self.z_ref[:, -1] = self.smooth_heading(self.z_ref[:, -1])
         self.v_ref[:, -1] = np.clip(np.diff(self.z_ref[:, -1]) / self.dt, self.v_min_bound[-1], self.v_max_bound[-1])
-        self.v_ref[np.logical_and(diff_x == 0, diff_y == 0)] = 0
+        a_star_finished = np.logical_and(diff_x == 0, diff_y == 0)
+        if np.any(a_star_finished):
+            self.v_ref[a_star_finished] = 0
+            self.z_ref[a_star_finished, 2] = self.z_ref[max(np.argmax(a_star_finished) - 1, 0), 2]
 
     def init_decision_var(self):
         x_init = np.vstack([

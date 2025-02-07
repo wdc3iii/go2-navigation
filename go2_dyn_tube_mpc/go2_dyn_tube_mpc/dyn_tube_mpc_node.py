@@ -235,7 +235,7 @@ class DynamicTubeMPCNode(ObeliskController):
 
     def vel_lim_callback(self, v_max_msg: VelocityCommand):
         """Sets the upper bound on velocity limits for the planner"""
-        prop_v_lim = np.clip(np.array([v_max_msg.v_x, v_max_msg.v_y, v_max_msg.w_z]), 0, 1)
+        prop_v_lim = np.clip(np.array([v_max_msg.v_x, v_max_msg.v_y, v_max_msg.w_z]), 0., 1.)
         self.v_max = prop_v_lim * self.v_max_bound
         self.v_min = prop_v_lim * self.v_min_bound
 

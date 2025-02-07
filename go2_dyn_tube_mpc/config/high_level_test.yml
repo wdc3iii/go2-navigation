@@ -79,7 +79,7 @@ onboard:
           history_depth: 10
           callback_group: None
         - ros_parameter: sub_vel_lim_setting
-          topic: /obelisk/go2/vel_limits
+          topic: /obelisk/go2/dtmpc_vel_lim
           history_depth: 10
           callback_group: None
         - ros_parameter: sub_nearest_points_setting

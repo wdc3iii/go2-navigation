@@ -279,6 +279,11 @@ class HighLevelPlannerNode(ObeliskController):
             self.get_logger().warn("High Level Plan began in occupied space!")
             return traj_msg
         # TODO: decide whether to follow path in Dynamic or Mapping mode
+        vel_lim = VelocityCommand()
+        vel_lim.v_x = 1.
+        vel_lim.v_y = 1.
+        vel_lim.w_z = 1.
+        self.obk_publishers["pub_vel_lim_key"].publish(vel_lim)
 
         try:
             # Get transform from odom to robot frame
@@ -298,13 +303,13 @@ class HighLevelPlannerNode(ObeliskController):
         ]) @ (path - self.map_to_odom_p).T).T
         
         # setting the message (geometric only path)
-        # TODO: should add desired orientation, at least at goal...
         traj_msg.horizon = path.shape[0] - 1
         traj_msg.n = path.shape[1]
         traj_msg.m = 0
         traj_msg.z = np.array(path).flatten().tolist()
 
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
+        
 
         # Publish message for viz
         viz_msg = Marker()
