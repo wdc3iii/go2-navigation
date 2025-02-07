@@ -262,6 +262,8 @@ class DynamicTubeMPC:
 
     def get_nearest_map_points(self):
         warm_x, warm_y = pose_to_map(self.z_warm, self.map_origin, self.map_theta, self.map_resolution)
+        warm_x = np.clip(warm_x, 0, self.map_nearest_dists.shape[0] - 1)
+        warm_y = np.clip(warm_y, 0, self.map_nearest_dists.shape[1] - 1)
         nearest_dists = self.map_nearest_dists[warm_x, warm_y].T
         nearest_points = self.map_nearest_inds[:, warm_x, warm_y].T
         nearest_points = map_to_pose(nearest_points, self.map_origin, self.map_theta, self.map_resolution)
@@ -375,8 +377,9 @@ class DynamicTubeMPC:
             "ipopt.sb": "yes",
             "ipopt.max_iter": 200,
             "ipopt.tol": 1e-4,
-            # "ipopt.print_level": 5,
-            "print_time": True,
+            "print_time": False,
+            "ipopt.print_level": 0,  # Further suppress IPOPT messages
+            # "ipopt.sb": "yes",  # Suppresses IPOPT banner
         }
 
         self.nlp_solver = ca.nlpsol("DeepTubeMPC", "ipopt", nlp_dict, self.nlp_opts)

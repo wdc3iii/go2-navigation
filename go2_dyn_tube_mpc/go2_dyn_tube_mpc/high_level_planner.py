@@ -156,7 +156,7 @@ class HighLevelPlannerNode(ObeliskController):
 
     def pub_nearest_points_callback(self):
         if not self.received_map:
-            self.get_logger().info("High Level has not received map yet, and cannot compute nearest points.")
+            self.get_logger().warn("High Level has not received map yet, and cannot compute nearest points.")
             return
         
         try:
@@ -259,16 +259,25 @@ class HighLevelPlannerNode(ObeliskController):
             obelisk_control_msg: The control message.
         """
         # Don't plan if we haven't received a path to follow
+        traj_msg = Trajectory()
+        msg_time = self.get_clock().now()
+        traj_msg.header.stamp = msg_time.to_msg()
         if not self.received_goal:
-            self.get_logger().info("High Level Planner has not recieved goal")
-            return
+            self.get_logger().warn("High Level Planner has not recieved goal")
+            return traj_msg
         if not self.received_curr:
-            self.get_logger().info("High Level Planner has not recieved current location")
-            return
+            self.get_logger().warn("High Level Planner has not recieved current location")
+            return traj_msg
+        try:
+            map_to_base = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time(), Duration(seconds=1.0))
+        except tf2_ros.LookupException as e:
+            self.get_logger().warn(f"Transform error: {e}: map -> base_link")
+            return traj_msg
         
-        path, cost, frontiers = self.explorer.find_frontiers_to_goal(self.px_z, self.goal_pose)
+        path, cost, frontiers = self.explorer.find_frontiers_to_goal(np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y, 0]), self.goal_pose)
         if path is None:
-            self.get_logger().info("High Level Plan began in occupied space!")
+            self.get_logger().warn("High Level Plan began in occupied space!")
+            return traj_msg
         # TODO: decide whether to follow path in Dynamic or Mapping mode
 
         try:
@@ -287,12 +296,9 @@ class HighLevelPlannerNode(ObeliskController):
             [np.cos(self.map_to_odom_yaw), np.sin(self.map_to_odom_yaw)],
             [-np.sin(self.map_to_odom_yaw), np.cos(self.map_to_odom_yaw)],
         ]) @ (path - self.map_to_odom_p).T).T
+        
         # setting the message (geometric only path)
         # TODO: should add desired orientation, at least at goal...
-        # TODO: publish map in odom frame
-        msg_time = self.get_clock().now()
-        traj_msg = Trajectory()
-        traj_msg.header.stamp = msg_time.to_msg()
         traj_msg.horizon = path.shape[0] - 1
         traj_msg.n = path.shape[1]
         traj_msg.m = 0

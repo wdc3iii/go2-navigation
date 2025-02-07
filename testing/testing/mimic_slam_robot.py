@@ -166,7 +166,8 @@ def main(args=None):
     node = FakeSLAMNode()
 
     # Example trajectory: Circular motion
-    trajectory = [(math.cos(t) * 2, math.sin(t) * 2, t) for t in np.linspace(0, 2 * math.pi, 100)]
+    w = 10
+    trajectory = [(math.cos(t) * 2, math.sin(t) * 2, t) for t in np.linspace(0, 2 * math.pi, 100 * w)]
     node.set_trajectory(trajectory)
 
     rclpy.spin(node)

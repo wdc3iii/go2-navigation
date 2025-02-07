@@ -23,7 +23,7 @@ def pose_to_map(pose, map_origin, map_theta, resolution):
         [-np.sin(map_theta), np.cos(map_theta)]
     ])
     map_inds = (Rinv @ rel_pose.T / resolution).astype(int).T
-    return map_inds[..., 0].tolist(), map_inds[..., 1].tolist()
+    return map_inds[..., 0], map_inds[..., 1]
 
 
 class MapUtils:
@@ -81,7 +81,10 @@ class MapUtils:
             raise TypeError(f"Pose type {type(pose)} not recognized.")
         if pose.shape[-1] == 3:
             pose = pose[..., :2]
-        return pose_to_map(pose, self.map_origin, self.map_theta, self.resolution)
+        map_x, map_y = pose_to_map(pose, self.map_origin, self.map_theta, self.resolution)
+        map_x = np.clip(map_x, 0, self.shape[0] - 1)
+        map_y = np.clip(map_y, 0, self.shape[1] - 1)
+        return map_x.tolist(), map_y.tolist()
 
 
     def map_to_pose(self, map_inds):

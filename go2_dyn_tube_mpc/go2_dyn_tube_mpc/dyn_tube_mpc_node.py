@@ -142,25 +142,27 @@ class DynamicTubeMPCNode(ObeliskController):
             x_hat_msg: The Obelisk message containing the state estimate.
         """
 
-        if len(x_hat_msg.q_base) == 7:
-            self.px_z = np.array([
-                x_hat_msg.q_base[0],                    # x
-                x_hat_msg.q_base[1],                    # y
-                self.quat2yaw(x_hat_msg.q_base[3:])     # theta
-            ])
-        else:
-            self.get_logger().error(f"Estimated State base pose size does not match URDF! Size is {len(x_hat_msg.q_base)} instead of 7.")
+        # if len(x_hat_msg.q_base) == 7:
+        #     self.px_z = np.array([
+        #         x_hat_msg.q_base[0],                    # x
+        #         x_hat_msg.q_base[1],                    # y
+        #         self.quat2yaw(x_hat_msg.q_base[3:])     # theta
+        #     ])
+        # else:
+        #     self.get_logger().error(f"Estimated State base pose size does not match URDF! Size is {len(x_hat_msg.q_base)} instead of 7.")
 
-        if len(x_hat_msg.v_base) == 6:
-            self.px_v = np.array([
-                x_hat_msg.v_base[0],                    # v_x
-                x_hat_msg.v_base[1],                    # v_y
-                x_hat_msg.v_base[-1]                    # w_z
-            ])
-        else:
-            self.get_logger().error(f"Estimated State base velocity size does not match URDF! Size is {len(x_hat_msg.v_base)} instead of 6.")
+        # if len(x_hat_msg.v_base) == 6:
+        #     self.px_v = np.array([
+        #         x_hat_msg.v_base[0],                    # v_x
+        #         x_hat_msg.v_base[1],                    # v_y
+        #         x_hat_msg.v_base[-1]                    # w_z
+        #     ])
+        # else:
+        #     self.get_logger().error(f"Estimated State base velocity size does not match URDF! Size is {len(x_hat_msg.v_base)} instead of 6.")
 
-        self.dtmpc.set_initial_condition(self.px_z)
+        # self.dtmpc.set_initial_condition(self.px_z)
+        """Going to use tf listener for now"""
+        pass
 
     def plan_callback(self, plan_msg: Trajectory):
         # Accepts a trajectory which is a sequence of waypoints
@@ -259,19 +261,26 @@ class DynamicTubeMPCNode(ObeliskController):
         # Don't plan if we haven't received a path to follow
         traj_msg = Trajectory()
         if not (self.received_path and self.received_map):
-
+            self.get_logger().warn(f"Have not recieved path {self.received_path} or map {self.received_map}. Cannot run DTMPC")
             return traj_msg
 
         # Solve the MPC
-        z, v = self.dtmpc.solve()
+        try:
+            odom_to_base = self.tf_buffer.lookup_transform("odom", "base_link", rclpy.time.Time(), Duration(seconds=1.0))
+        except tf2_ros.LookupException as e:
+            self.get_logger().warn(f"Transform error: {e}: odom -> base_link")
+            return 
 
+        yaw = self.quat2yaw([odom_to_base.transform.rotation.x, odom_to_base.transform.rotation.y, odom_to_base.transform.rotation.z, odom_to_base.transform.rotation.w])
+        self.dtmpc.set_initial_condition(np.array([odom_to_base.transform.translation.x, odom_to_base.transform.translation.y, yaw]))
+        z, v = self.dtmpc.solve()
 
         # Construct the message
         msg_time = self.get_clock().now()
         traj_msg.header.stamp = msg_time.to_msg()
         traj_msg.z = z.flatten().tolist()
         traj_msg.v = v.flatten().tolist()
-        traj_msg.t = (self.ts + msg_time.nanoseconds / 1e-9).tolist()
+        traj_msg.t = self.ts.tolist()
         
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
 
