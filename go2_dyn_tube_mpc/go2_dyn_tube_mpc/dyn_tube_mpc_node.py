@@ -278,6 +278,9 @@ class DynamicTubeMPCNode(ObeliskController):
         # Construct the message
         msg_time = self.get_clock().now()
         traj_msg.header.stamp = msg_time.to_msg()
+        traj_msg.horizon = self.dtmpc.N
+        traj_msg.n = self.dtmpc.n
+        traj_msg.m = self.dtmpc.m
         traj_msg.z = z.flatten().tolist()
         traj_msg.v = v.flatten().tolist()
         traj_msg.t = self.ts.tolist()

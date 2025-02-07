@@ -224,7 +224,8 @@ class DynamicTubeMPC:
         a_star_finished = np.logical_and(diff_x == 0, diff_y == 0)
         if np.any(a_star_finished):
             self.v_ref[a_star_finished] = 0
-            self.z_ref[a_star_finished, 2] = self.z_ref[max(np.argmax(a_star_finished) - 1, 0), 2]
+            a_star_finished = np.insert(a_star_finished, 0, 0)
+            self.z_ref[a_star_finished, 2] = self.z_ref[np.argmax(a_star_finished) - 1, 2]
 
     def init_decision_var(self):
         x_init = np.vstack([

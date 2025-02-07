@@ -9,6 +9,8 @@ from geometry_msgs.msg import TransformStamped, Pose2D
 from nav_msgs.msg import OccupancyGrid, MapMetaData
 from map_msgs.msg import OccupancyGridUpdate  # Import the correct message type
 from sensor_msgs.msg import LaserScan
+from go2_dyn_tube_mpc_msg.msg import Trajectory
+
 
 class FakeSLAMNode(Node):
     def __init__(self):
@@ -24,8 +26,10 @@ class FakeSLAMNode(Node):
         # Publishers
         self.map_pub = self.create_publisher(OccupancyGrid, '/map', 1)
         self.map_update_pub = self.create_publisher(OccupancyGridUpdate, '/map_updates', 1)
-        self.scan_pub = self.create_publisher(LaserScan, '/scan', 1)
+        self.scan_pub = self.create_publisher(LaserScan, '/scan', 3)
         self.goal_pub = self.create_publisher(Pose2D, '/obelisk/go2/goal_pose', 1)
+
+        self.mpc_sub = self.create_subscription(Trajectory, '/obelisk/go2/dtmpc_path', self.trajectory_callback, 1)
 
         # TF Broadcasters
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -37,10 +41,12 @@ class FakeSLAMNode(Node):
         self.trajectory = []
         self.current_index = 0
 
+        self.z = np.zeros((3,))
+
         # TF Offsets
         self.map_to_odom_x = 0.0
         self.map_to_odom_y = 0.0
-        self.map_to_odom_theta = 0.0
+        self.map_to_odom_theta = 2.0
 
         # Timers
         self.create_timer(1.0, self.publish_map)
@@ -113,15 +119,26 @@ class FakeSLAMNode(Node):
         scan_msg.ranges = [scan_msg.range_max / 2] * num_readings  # Simulated LIDAR scan
         self.scan_pub.publish(scan_msg)
 
+    def trajectory_callback(self, msg):
+        v = np.array(msg.v).reshape(msg.horizon, msg.m)
+        v0 = v[0]
+        t = msg.t
+
+        self.z = self.z + np.array([
+            v0[0] * np.cos(self.z[2]) - v0[1] * np.sin(self.z[2]),
+            v0[0] * np.sin(self.z[2]) + v0[1] * np.cos(self.z[2]),
+            v0[2]
+        ]) * (t[1] - t[0])
+
     def publish_tf(self):
         """Publish TF transforms with drift in map->odom."""
         now = self.get_clock().now().to_msg()
 
         # Introduce Drift in map -> odom
         drift_rate = self.get_parameter('drift_rate').value
-        self.map_to_odom_x += drift_rate * 0.5
-        self.map_to_odom_y += drift_rate * 0.25
-        self.map_to_odom_theta += drift_rate * 1.00
+        self.map_to_odom_x += drift_rate * 0.25
+        self.map_to_odom_y += drift_rate * 0.125
+        self.map_to_odom_theta += drift_rate * .3
 
         tf_map_odom = TransformStamped()
         tf_map_odom.header.stamp = now
@@ -139,10 +156,14 @@ class FakeSLAMNode(Node):
             tf_odom_base.header.stamp = now
             tf_odom_base.header.frame_id = "odom"
             tf_odom_base.child_frame_id = "base_link"
-            tf_odom_base.transform.translation.x = pose_x
-            tf_odom_base.transform.translation.y = pose_y
-            tf_odom_base.transform.rotation.z = math.sin(theta / 2)
-            tf_odom_base.transform.rotation.w = math.cos(theta / 2)
+            # tf_odom_base.transform.translation.x = pose_x
+            # tf_odom_base.transform.translation.y = pose_y
+            # tf_odom_base.transform.rotation.z = math.sin(theta / 2)
+            # tf_odom_base.transform.rotation.w = math.cos(theta / 2)
+            tf_odom_base.transform.translation.x = self.z[0]
+            tf_odom_base.transform.translation.y = self.z[1]
+            tf_odom_base.transform.rotation.z = math.sin(self.z[2] / 2)
+            tf_odom_base.transform.rotation.w = math.cos(self.z[2] / 2)
 
             self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
         else:
