@@ -12,12 +12,12 @@ from grid_map_msgs.msg import GridMap
 from sensor_msgs.msg import LaserScan
 import geometry_msgs.msg
 from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
-
+from go2_dyn_tube_mpc.map_utils import map_to_pose
 import torch
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
 
@@ -79,8 +79,10 @@ class DynamicTubeMPCNode(ObeliskController):
         self.v_max = self.v_max_bound
         self.v_min = self.v_min_bound
 
+        self.cost_map_msg = MarkerArray()
+
         # Cost matrices
-        self.declare_parameter("Q", [1., 1., 0.1])          # State cost
+        self.declare_parameter("Q", [1., 1., 0.5])          # State cost
         Q = np.array(self.get_parameter("Q").get_parameter_value().double_array_value)
         self.declare_parameter("Qf", [10., 10., 10.])       # Terminal Cost
         Qf = np.array(self.get_parameter("Qf").get_parameter_value().double_array_value)
@@ -126,6 +128,11 @@ class DynamicTubeMPCNode(ObeliskController):
         self.register_obk_publisher(
             "pub_viz_setting",
             key="pub_viz_key",  # key can be specified here or in the config file
+            msg_type=Marker
+        )
+        self.register_obk_publisher(
+            "pub_constraint_setting",
+            key="pub_constraint_key",  # key can be specified here or in the config file
             msg_type=Marker
         )
 
@@ -193,6 +200,10 @@ class DynamicTubeMPCNode(ObeliskController):
         ))
         self.dtmpc.update_nearest_inds(nearest_inds, nearest_dists, map_origin, map_theta)
         self.received_map = True
+
+        from scipy.io import savemat
+        savemat("nearest_data.mat", {"nearest_dists": nearest_dists, "nearest_inds": nearest_inds, "map_origin": map_origin, "map_theta": map_theta})
+        # raise RuntimeError()
 
     def laser_scan_callback(self, scan_msg: LaserScan):
         # Convert the laser scan into the odom frame
@@ -287,6 +298,46 @@ class DynamicTubeMPCNode(ObeliskController):
         
         self.obk_publishers["pub_ctrl"].publish(traj_msg)
 
+        A, b, nearest_points = self.dtmpc.compute_constraints()
+        constraint_msg = Marker()
+        constraint_msg.header.stamp = msg_time.to_msg()
+        constraint_msg.header.frame_id = 'odom'
+        constraint_msg.ns = "dynamic_tube_mpc"
+        constraint_msg.type = Marker.LINE_LIST
+        constraint_msg.action = Marker.ADD
+        constraint_msg.scale.x = 0.02
+        constraint_msg.scale.y = 0.02
+        constraint_msg.scale.z = 0.02
+        clr = ColorRGBA()
+        clr.a = 1.
+        clr.r = 0.
+        clr.b = 1.
+        clr.g = 0.
+        for i in range(b.shape[0]):
+            a0 = A[i, :]
+            b0 = b[i]
+
+            p = nearest_points[i, :]
+            c = 1
+            p1 = Point()
+            p2 = Point()
+            if np.abs(a0[0]) > 0.5:
+                p1.y = p[1] - c
+                p2.y = p[1] + c
+                p1.x = -(a0[1] * p1.y + b0) / a0[0]
+                p2.x = -(a0[1] * p2.y + b0) / a0[0]
+            else:
+                p1.x = p[0] - c
+                p2.x = p[0] + c
+                p1.y = -(a0[0] * p1.x + b0) / a0[1]
+                p2.y = -(a0[0] * p2.x + b0) / a0[1]
+            
+            constraint_msg.points.append(p1)
+            constraint_msg.points.append(p2)
+            constraint_msg.colors.append(clr)
+            constraint_msg.colors.append(clr)
+        self.obk_publishers["pub_constraint_key"].publish(constraint_msg)
+
         # Publish message for viz
         viz_msg = Marker()
         viz_msg.header.stamp = msg_time.to_msg()
@@ -310,6 +361,43 @@ class DynamicTubeMPCNode(ObeliskController):
             viz_msg.colors.append(color)
 
         self.obk_publishers["pub_viz_key"].publish(viz_msg)
+
+
+        # for marker in self.cost_map_msg.markers:
+        #     marker.action = Marker.DELETE
+        # self.obk_publishers['pub_dist_key'].publish(self.cost_map_msg)
+        # self.cost_map_msg = MarkerArray()
+        # i = 0
+        # for xc in range(self.dtmpc.map_nearest_dists.shape[0]):
+        #     for yc in range(self.dtmpc.map_nearest_dists.shape[1]):
+        #         pos = map_to_pose(np.array((xc, yc)), self.dtmpc.map_origin, self.dtmpc.map_theta, self.dtmpc.map_resolution)
+        #         dist = Marker()
+        #         dist.header.stamp = msg_time.to_msg()
+        #         dist.header.frame_id = 'map'
+        #         dist.type = Marker.CUBE
+        #         dist.ns = "dist map"
+        #         dist.id = i
+        #         i += 1
+        #         dist.action = Marker.ADD
+        #         dist.scale.x = 0.05
+        #         dist.scale.y = 0.05
+        #         dist.scale.z = 0.01
+        #         dist.color.a = 0.5
+        #         d = self.dtmpc.map_nearest_dists[xc, yc].astype(float)
+                
+        #         frac = min(abs(d), 1.)
+        #         if d > 0:
+        #             dist.color.r = 0.
+        #             dist.color.b = 1. - frac
+        #             dist.color.g = frac
+        #         else:
+        #             dist.color.r = frac
+        #             dist.color.b = 1. - frac
+        #             dist.color.g = 0.
+        #         dist.pose.position.x = pos[0]
+        #         dist.pose.position.y = pos[1]
+        #         self.cost_map_msg.markers.append(dist)
+        # self.obk_publishers['pub_dist_key'].publish(self.cost_map_msg)
         # assert is_in_bound(type(traj_msg), ObeliskControlMsg)
         return traj_msg
 

@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 import tf2_ros
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import MultiThreadedExecutor
 import rclpy
 from rclpy.duration import Duration
 from obelisk_py.core.utils.ros import spin_obelisk
@@ -20,7 +20,9 @@ from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import OccupancyGrid
 from map_msgs.msg import OccupancyGridUpdate
 from std_msgs.msg import Float32MultiArray, MultiArrayLayout, MultiArrayDimension, ColorRGBA
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
+import time
+import threading 
 
 
 class HighLevelPlannerNode(ObeliskController):
@@ -43,17 +45,22 @@ class HighLevelPlannerNode(ObeliskController):
         # Load DTMPC parameters
         # Horizon length, timing
         self.declare_parameter("min_frontier_size", 5)
+        self.map_lock = threading.Lock()
+        self.inflated_map_lock = threading.Lock()
         self.explorer = Exploration(
+            self.map_lock, self.inflated_map_lock,
             min_frontier_size=self.get_parameter("min_frontier_size").get_parameter_value().integer_value,
             free=0, uncertain=-1, occupied=100
         )
+        self.declare_parameter("downsample", 4)
+        self.downsample = self.get_parameter("downsample").get_parameter_value().integer_value
 
         # Velocity bounds
         self.declare_parameter("v_max_mapping", 0.2)
         self.v_max_mapping = self.get_parameter("v_max_mapping").get_parameter_value().double_value
 
         # Nearest_points_size
-        self.declare_parameter("nearest_points_size", 200)
+        self.declare_parameter("nearest_points_size", 60)
         self.nearest_points_size = self.get_parameter("nearest_points_size").get_parameter_value().integer_value
 
         self.goal_pose = np.zeros((3,))
@@ -64,6 +71,8 @@ class HighLevelPlannerNode(ObeliskController):
         self.update_entire_map = True
         self.map_to_odom_p = None
         self.map_to_odom_yaw = None
+
+        self.front_msg = MarkerArray()
 
         # Declare subscriber to pose commands
         self.register_obk_subscription(
@@ -98,6 +107,11 @@ class HighLevelPlannerNode(ObeliskController):
             "pub_viz_setting",
             key="pub_viz_key",  # key can be specified here or in the config file
             msg_type=Marker
+        )
+        self.register_obk_publisher(
+            "pub_front_setting",
+            key="pub_front_key",  # key can be specified here or in the config file
+            msg_type=MarkerArray
         )
         self.register_obk_timer(
             "timer_nearest_pts_setting",
@@ -169,12 +183,15 @@ class HighLevelPlannerNode(ObeliskController):
                 map_to_odom.transform.translation.x, map_to_odom.transform.translation.y
             ])
             self.map_to_odom_yaw = self.quat2yaw([map_to_odom.transform.rotation.x, map_to_odom.transform.rotation.y, map_to_odom.transform.rotation.z, map_to_odom.transform.rotation.w])
+
+            map_to_base = self.tf_buffer.lookup_transform("map", "base_link", rclpy.time.Time(), Duration(seconds=1.0))
         except tf2_ros.LookupException as e:
             self.get_logger().warm(f"Transform error: {e}")
             return
 
         # Compute submaps
-        nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = self.explorer.compute_nearest_inds(self.px_z[:2], self.nearest_points_size)
+        pz_x_map = np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y])
+        nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = self.explorer.compute_nearest_inds(pz_x_map, self.nearest_points_size)
 
         nearest_point_msg = GridMap()
         # Header
@@ -275,7 +292,46 @@ class HighLevelPlannerNode(ObeliskController):
             self.get_logger().warn(f"Transform error: {e}: map -> base_link")
             return traj_msg
         
-        path, cost, frontiers = self.explorer.find_frontiers_to_goal(np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y, 0]), self.goal_pose)
+        t0 = time.perf_counter_ns()
+        path, cost, frontiers = self.explorer.find_frontiers_to_goal(np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y, 0]), self.goal_pose, self.downsample)
+        self.get_logger().info(f"Astar solve took {(time.perf_counter_ns() - t0) * 1e-9}")
+        # Visualize frontiers
+        yel = [0.9290, 0.6940, 0.1250]
+        pur = [0.4940, 0.1840, 0.5560]
+        
+        for marker in self.front_msg.markers:
+            marker.action = Marker.DELETE
+        self.obk_publishers["pub_front_key"].publish(self.front_msg)
+        self.front_msg = MarkerArray()
+        if frontiers:
+            for ind, front in enumerate(frontiers):
+                front_map = self.explorer.map.map_to_pose(front[0])
+                frac = ind / (max(len(front) - 1, 1))
+                r = frac * pur[0] + (1 - frac) * yel[0]
+                g = frac * pur[1] + (1 - frac) * yel[1]
+                b = frac * pur[2] + (1 - frac) * yel[2]
+                for pt_ind, front_pt in enumerate(front_map):
+                    pt = Marker()
+                    pt.header.stamp = msg_time.to_msg()
+                    pt.header.frame_id = 'map'
+                    pt.type = Marker.SPHERE
+                    pt.ns = f"frontier_{ind}"
+                    pt.id = pt_ind
+                    pt.action = Marker.ADD
+                    pt.scale.x = 0.05
+                    pt.scale.y = 0.05
+                    pt.scale.z = 0.05
+                    pt.color.a = 1.
+                    pt.color.r = r
+                    pt.color.b = b
+                    pt.color.g = g
+                    pt.pose.position.x = front_pt[0]
+                    pt.pose.position.y = front_pt[1]
+                    self.front_msg.markers.append(pt)
+            self.obk_publishers["pub_front_key"].publish(self.front_msg)
+        else:
+            self.get_logger().info("No frontiers located.")
+
         if path is None:
             self.get_logger().warn("High Level Plan began in occupied space!")
             return traj_msg
@@ -341,7 +397,7 @@ class HighLevelPlannerNode(ObeliskController):
 
 def main(args: Optional[List] = None) -> None:
     """Main entrypoint."""
-    spin_obelisk(args, HighLevelPlannerNode, SingleThreadedExecutor)
+    spin_obelisk(args, HighLevelPlannerNode, MultiThreadedExecutor)
 
 
 if __name__ == "__main__":

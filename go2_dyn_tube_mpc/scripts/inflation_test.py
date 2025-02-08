@@ -9,7 +9,7 @@ FREE = 0
 UNCERTAIN = 1
 OCCUPIED = 2
 
-display = False
+display = True
 
 def generate_maze(width, height):
     """Generate a maze using recursive backtracking algorithm."""
@@ -60,14 +60,25 @@ def plot_maze(front, path, last_path, frontiers):
 
 if __name__ == '__main__':
     # Generate and plot the maze
-    maze_width, maze_height = 31, 51  # Odd dimensions for proper maze generation
-    scale = 4
-    sensing_range = 10
-    occ_grid_gt = generate_maze(maze_width, maze_height)
+    occ_grid_gt = np.array([
+        [FREE, UNCERTAIN, UNCERTAIN, UNCERTAIN, UNCERTAIN],
+        [FREE, FREE, OCCUPIED, OCCUPIED, OCCUPIED],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, FREE, FREE, FREE],
+        [FREE, FREE, OCCUPIED, OCCUPIED, OCCUPIED],
+        [FREE, FREE, UNCERTAIN, UNCERTAIN, UNCERTAIN]
+    ])
 
-    occ_grid_gt = zoom(occ_grid_gt, scale, order=0)
     front = Exploration(threading.Lock(), threading.Lock(), 1, free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED, robot_radius=1)
-    front.set_map(np.ones_like(occ_grid_gt), (0, 0, 0), 0.1)
+    front.set_map(np.ones_like(occ_grid_gt) * UNCERTAIN, (0, 0, 0), 0.1)
+    front.update_map(np.ones((2, 3)) * OCCUPIED, (1, 0))
     # start = None
     # goal = None
     # for r in range(maze_height * scale):
@@ -77,7 +88,7 @@ if __name__ == '__main__':
     #                 start = [r, c]
     #             goal = [r, c]
     start = [5, 5]
-    goal = [119, 199]
+    goal = [199, 199]
     curr_pose = front.search_map.map_to_pose(start)
     goal_pose = front.search_map.map_to_pose(goal)
     total_path = []

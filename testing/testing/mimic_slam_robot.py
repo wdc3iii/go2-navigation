@@ -24,7 +24,7 @@ class FakeSLAMNode(Node):
         # Parameters
         self.declare_parameter('map_size', [400, 1000])  # Grid size
         self.declare_parameter('resolution', 0.05)  # Map resolution
-        self.declare_parameter('scan_range', 2.0)  # LIDAR range
+        self.declare_parameter('scan_range', 2000.0)  # LIDAR range
         self.declare_parameter('scan_resolution', 0.1)  # Scan angle step
         self.declare_parameter('drift_rate', 0.001)  # Drift per second
 
@@ -113,10 +113,10 @@ class FakeSLAMNode(Node):
     def sense(self):
         x_c, y_c = pose_to_map(self.z[:2], self.map_origin + np.array([self.map_to_odom_x, self.map_to_odom_y]), self.map_to_odom_theta, self.get_parameter('resolution').value)
         
-        x1 = max(0, x_c - 25)
-        x2 = min(self.get_parameter("map_size").value[1], x_c + 25)
-        y1 = max(0, y_c - 30)
-        y2 = min(self.get_parameter("map_size").value[1], y_c + 30)
+        x1 = max(0, x_c - 75)
+        x2 = min(self.get_parameter("map_size").value[1], x_c + 75)
+        y1 = max(0, y_c - 90)
+        y2 = min(self.get_parameter("map_size").value[1], y_c + 90)
 
         update = OccupancyGridUpdate()
         update.header.stamp = self.get_clock().now().to_msg()

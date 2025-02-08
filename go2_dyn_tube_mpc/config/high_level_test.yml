@@ -5,56 +5,63 @@ onboard:
     - pkg: go2_dyn_tube_mpc
       # params:
       executable: high_level_planner
-      # callback_groups:
+      callback_groups: 
+        - mpc_constraint
+        - map_update
+        - a_star
       publishers:
         # ----- Path Publisher ----- #
         - ros_parameter: pub_ctrl_setting
           topic: /obelisk/go2/a_star_path
-          history_depth: 10
-          callback_group: None
+          history_depth: 1
+          callback_group: a_star
         # ----- Vel Limit Publisher ----- #
         - ros_parameter: pub_vel_lim_setting
           topic: /obelisk/go2/dtmpc_vel_lim
-          history_depth: 10
-          callback_group: None
+          history_depth: 1
+          callback_group: a_star
         # ----- NearestPoints Publisher ----- #
         - ros_parameter: pub_nearest_points_setting
           topic: /obelisk/go2/nearest_points
-          history_depth: 10
-          callback_group: None
+          history_depth: 1
+          callback_group: mpc_constraint
         # ----- Visualization Publisher ----- #
         - ros_parameter: pub_viz_setting
           topic: /obelisk/go2/a_star_viz
-          history_depth: 10
-          callback_group: None
+          history_depth: 1
+          callback_group: a_star
+        - ros_parameter: pub_front_setting
+          topic: /obelisk/go2/frontiers
+          history_depth: 1
+          callback_group: a_star
       subscribers:
         # ----- Estimated State Subscriber ----- #
         - ros_parameter: sub_est_setting
           topic: /obelisk/go2/est_state
-          history_depth: 10
-          callback_group: None
+          history_depth: 1
+          callback_group: a_star
         # ----- Goal Pose Subscriber ----- #
         - ros_parameter: sub_goal_setting
           topic: /obelisk/go2/goal_pose
-          history_depth: 10
-          callback_group: None
+          history_depth: 1
+          callback_group: a_star
         # ----- Map Subscriber ----- #
         - ros_parameter: sub_map_setting
           topic: /map
           history_depth: 1
-          callback_group: None
+          callback_group: map_update
         # ----- Map Update Subscriber ----- #
         - ros_parameter: sub_map_update_setting
           topic: /map_updates
           history_depth: 10
-          callback_group: None
+          callback_group: map_update
       timers:
         - ros_parameter: timer_ctrl_setting
           timer_period_sec: 1.0
-          callback_group: None
+          callback_group: a_star
         - ros_parameter: timer_nearest_pts_setting
           timer_period_sec: 0.1
-          callback_group: None
+          callback_group: mpc_constraint
   # ----- DTMPC ----- #
     - pkg: go2_dyn_tube_mpc
       executable: dyn_tube_mpc
@@ -62,37 +69,41 @@ onboard:
       publishers:
         - ros_parameter: pub_ctrl_setting
           topic: /obelisk/go2/dtmpc_path
-          history_depth: 10
+          history_depth: 1
           callback_group: None
         # ----- Visualization Publisher ----- #
         - ros_parameter: pub_viz_setting
           topic: /obelisk/go2/dtmpc_viz
-          history_depth: 10
+          history_depth: 1
+          callback_group: None
+        - ros_parameter: pub_constraint_setting
+          topic: /obelisk/go2/dtmpc_constraint
+          history_depth: 1
           callback_group: None
       subscribers:
         - ros_parameter: sub_est_setting
           topic: /obelisk/go2/est_state
-          history_depth: 10
+          history_depth: 1
           callback_group: None
         - ros_parameter: sub_plan_setting
           topic: /obelisk/go2/a_star_path
-          history_depth: 10
+          history_depth: 1
           callback_group: None
         - ros_parameter: sub_vel_lim_setting
           topic: /obelisk/go2/dtmpc_vel_lim
-          history_depth: 10
+          history_depth: 1
           callback_group: None
         - ros_parameter: sub_nearest_points_setting
           topic: /obelisk/go2/nearest_points
-          history_depth: 10
+          history_depth: 1
           callback_group: None
         - ros_parameter: sub_scan_setting
           topic: /scan
-          history_depth: 10
+          history_depth: 1
           callback_group: None
       timers:
         - ros_parameter: timer_ctrl_setting
-          timer_period_sec: 0.1
+          timer_period_sec: 0.05
           callback_group: None
   estimation:
     - pkg: obelisk_unitree_cpp

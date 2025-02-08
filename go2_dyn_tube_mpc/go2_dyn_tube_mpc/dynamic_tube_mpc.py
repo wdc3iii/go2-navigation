@@ -163,7 +163,7 @@ class DynamicTubeMPC:
 
     def init_params(self):
         # Compute constraints
-        A, b = self.compute_constraints()
+        A, b, _ = self.compute_constraints()
         # Compute reference
         self.compute_reference()
 
@@ -196,7 +196,19 @@ class DynamicTubeMPC:
         if self.fix_internal_constraints:
             A[nearest_map_dists < 0] *= -1
             b[nearest_map_dists < 0] += (np.sqrt(2) + 1) * self.map_resolution / 2
-        return A, b
+
+        from scipy.io import savemat
+        savemat("constraints.mat", {
+            "A": A, "b": b,
+            "nearest_map_points": nearest_map_points,
+            "nearest_map_dists": nearest_map_dists,
+            "nearest_scan_points": nearest_scan_points,
+            "nearest_scan_dists": nearest_scan_dists,
+            "nearest_points": nearest_points,
+            "zwarm": self.z_warm
+        })
+        # raise RuntimeError()
+        return A, b, nearest_points
 
     @staticmethod
     def smooth_heading(v):
