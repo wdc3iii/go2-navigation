@@ -95,7 +95,7 @@ class TrajectoryTracker(ObeliskController):
         ))
         t = (self.get_clock().now() - self.t_last_path).nanoseconds / 1e9
 
-        v_cmd = track_trajectory(self.z_path, self.v_path, self.t_path, t, pz_x, self.K, self.v_min, self.v_max)
+        v_cmd = track_trajectory(self.z_des, self.v_des, self.t_path, t, pz_x, self.K, self.v_min, self.v_max)
 
         # Construct the message
         traj_msg.v_x = v_cmd[0]
@@ -106,6 +106,17 @@ class TrajectoryTracker(ObeliskController):
 
         assert is_in_bound(type(traj_msg), ObeliskControlMsg)
         return traj_msg
+
+    @staticmethod
+    def quat2yaw(quat):
+        qx = quat[0]
+        qy = quat[1]
+        qz = quat[2]
+        qw = quat[3]
+        siny_cosp = 2.0 * (qw * qz + qx * qy)
+        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+        yaw = np.arctan2(siny_cosp, cosy_cosp)
+        return yaw
 
 
 def main(args: Optional[List] = None) -> None:

@@ -66,6 +66,9 @@ onboard:
   # ----- DTMPC ----- #
     - pkg: go2_dyn_tube_mpc
       executable: dyn_tube_mpc
+      params:
+        v_max: [0.5, 0.5, 0.5]
+        v_min: [-0.1, -0.5, -0.5]
       # callback_groups:
       publishers:
         # ----- MPC Control Publisher ----- #
@@ -116,6 +119,9 @@ onboard:
   # ----- Tracking Controller ----- #
     - pkg: go2_dyn_tube_mpc
       executable: trajectory_tracker
+      params:
+        v_max: [0.75, 0.7, 0.75]
+        v_min: [-0.5, -0.75, -0.75]
       # callback_groups:
       publishers:
         # ----- Control Publisher ----- #

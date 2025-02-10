@@ -59,7 +59,7 @@ export ROS_HOME=~/sample-contact-walking
 
 To spoof data provided by SLAM, first run (in a different terminal, `use_robot_sim=True` to follow MuJoCo simulation, `False` to follow MPC exactly.)
 
-```ros2 run testing mimic_slam_robot --ros-args -p use_robot_sim=True```
+```ros2 run testing mimic_slam_robot --ros-args -p use_robot_sim:=True```
 
 The relevant commands are aliased by 
 

@@ -239,8 +239,20 @@ class HighLevelPlanner:
         if nodes_expanded >= self.astar_depth_limit:
             print("Warning: A* search depth limit exceeded")
         if path_to_goal is None:
-            path_to_front, cost_to_front, _, _ = self.select_intermediate_goal(frontiers, start_node, goal_node)
-            return path_to_front, cost_to_front, frontiers, self.PLAN_TO_FRONTIER_FOUND
+            if frontiers:
+                path_to_front, cost_to_front, _, _ = self.select_intermediate_goal(frontiers, start_node, goal_node)
+                return path_to_front, cost_to_front, frontiers, self.PLAN_TO_FRONTIER_FOUND
+            else:
+                # Save the problem
+                import pickle
+                with open('problematic_graph_solve.pkl', 'wb') as f:
+                    pickle.dump({
+                        "occ_grid": self.map.occ_grid,
+                        "start_pose": start_pose,
+                        "goal_pose": goal_pose
+                    }, f)
+
+                return None, None, frontiers, self.NO_PLAN_FOUND
 
         # TODO: Debugging
         # print(f"\tEnd Node: {path_to_goal[-1]}: {self.search_map[path_to_goal[-1]]}")

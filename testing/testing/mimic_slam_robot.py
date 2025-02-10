@@ -126,7 +126,12 @@ class FakeSLAMNode(Node):
         self.map_pub.publish(map_msg)
 
     def sense(self):
-        x_c, y_c = pose_to_map(self.z[:2], self.map_origin + np.array([self.map_to_odom_x, self.map_to_odom_y]), self.map_to_odom_theta, self.get_parameter('resolution').value)
+        z_sense = None
+        if self.get_parameter('use_robot_sim').value:
+            z_sense = self.z_robot
+        else:
+            z_sense = self.z
+        x_c, y_c = pose_to_map(z_sense[:2], self.map_origin + np.array([self.map_to_odom_x, self.map_to_odom_y]), self.map_to_odom_theta, self.get_parameter('resolution').value)
         
         x1 = max(0, x_c - 75)
         x2 = min(self.get_parameter("map_size").value[1], x_c + 75)
