@@ -1,21 +1,36 @@
 import rclpy
-from rclpy.node import Node
-import numpy as np
 import tf2_ros
-import math
-import random
-from scipy.ndimage import zoom
+from rclpy.node import Node
 
-from geometry_msgs.msg import TransformStamped, Pose2D
-from nav_msgs.msg import OccupancyGrid
-from map_msgs.msg import OccupancyGridUpdate  # Import the correct message type
 from sensor_msgs.msg import LaserScan
-from go2_dyn_tube_mpc_msg.msg import Trajectory
+from nav_msgs.msg import OccupancyGrid
+from map_msgs.msg import OccupancyGridUpdate
+from obelisk_sensor_msgs.msg import ObkFramePose
+from go2_dyn_tube_mpc_msgs.msg import Trajectory
+from geometry_msgs.msg import TransformStamped, Pose2D
 
 from go2_dyn_tube_mpc.map_utils import pose_to_map
+
+import math
+import random
+import numpy as np
+from scipy.ndimage import zoom
+
 FREE = 0
 UNCERTAIN = -1
 OCCUPIED = 100
+
+
+def quat2yaw(quat):
+        qx = quat[0]
+        qy = quat[1]
+        qz = quat[2]
+        qw = quat[3]
+        siny_cosp = 2.0 * (qw * qz + qx * qy)
+        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+        yaw = np.arctan2(siny_cosp, cosy_cosp)
+        return yaw
+
 
 class FakeSLAMNode(Node):
     def __init__(self):
@@ -33,23 +48,23 @@ class FakeSLAMNode(Node):
         self.map_update_pub = self.create_publisher(OccupancyGridUpdate, '/map_updates', 1)
         self.scan_pub = self.create_publisher(LaserScan, '/scan', 3)
         self.goal_pub = self.create_publisher(Pose2D, '/obelisk/go2/goal_pose', 1)
-
+        
+        self.sim_robot_sub = self.create_subscription(ObkFramePose, '/obelisk/go2/mocap', self.robot_sim_callback, 1)
         self.mpc_sub = self.create_subscription(Trajectory, '/obelisk/go2/dtmpc_path', self.trajectory_callback, 1)
 
         # TF Broadcasters
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        self.recieved_sim_robot = False
+
         # TF Offsets
         self.map_to_odom_x = 0.0
         self.map_to_odom_y = 0.0
         self.map_to_odom_theta = 0.0
 
         # Simulated Map
-        size_y, size_x = self.get_parameter('map_size').value
-        res = self.get_parameter('resolution').value
-        dx = size_x * res / 2
-        dy = size_y * res / 2
-        self.map_origin = np.array([-dx, -dy])
-        self.z = np.array((-dx + 2., -dy + 2., 0.))
+        self.map_origin = np.array([-2, -2])
+        self.z = np.zeros((3,))
+        self.z_robot = np.zeros((3,))
         self.generate_fake_map()
 
         # Ground Truth Trajectory
@@ -164,7 +179,16 @@ class FakeSLAMNode(Node):
             v0[0] * np.sin(self.z[2]) + v0[1] * np.cos(self.z[2]),
             v0[2]
         ]) * (t[1] - t[0])
-        self.sense()
+        if not self.recieved_sim_robot:
+            self.sense()
+
+    def robot_sim_callback(self, msg):
+        self.z_robot = np.array([
+            msg.position.x,
+            msg.position.y,
+            quat2yaw([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
+        ])
+        self.recieved_sim_robot = True
 
     def publish_tf(self):
         """Publish TF transforms with drift in map->odom."""
@@ -186,46 +210,43 @@ class FakeSLAMNode(Node):
         tf_map_odom.transform.rotation.w = math.cos(self.map_to_odom_theta / 2)
 
         # Publish odom->base_link (True pose)
-        if self.trajectory:
-            pose_x, pose_y, theta = self.trajectory[self.current_index]
+        if not self.recieved_sim_robot:
             tf_odom_base = TransformStamped()
             tf_odom_base.header.stamp = now
             tf_odom_base.header.frame_id = "odom"
             tf_odom_base.child_frame_id = "base_link"
-            # tf_odom_base.transform.translation.x = pose_x
-            # tf_odom_base.transform.translation.y = pose_y
-            # tf_odom_base.transform.rotation.z = math.sin(theta / 2)
-            # tf_odom_base.transform.rotation.w = math.cos(theta / 2)
             tf_odom_base.transform.translation.x = self.z[0]
             tf_odom_base.transform.translation.y = self.z[1]
             tf_odom_base.transform.rotation.z = math.sin(self.z[2] / 2)
             tf_odom_base.transform.rotation.w = math.cos(self.z[2] / 2)
 
             self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
+        elif self.recieved_sim_robot:
+            tf_odom_base = TransformStamped()
+            tf_odom_base.header.stamp = now
+            tf_odom_base.header.frame_id = "odom"
+            tf_odom_base.child_frame_id = "base_link"
+            tf_odom_base.transform.translation.x = self.z_robot[0]
+            tf_odom_base.transform.translation.y = self.z_robot[1]
+            tf_odom_base.transform.rotation.z = math.sin(self.z_robot[2] / 2)
+            tf_odom_base.transform.rotation.w = math.cos(self.z_robot[2] / 2)
+            self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
         else:
             self.tf_broadcaster.sendTransform([tf_map_odom])
 
     def publish_goal_pose(self):
+        size_y, size_x = self.get_parameter('map_size').value
+        resolution = self.get_parameter('resolution').value
         msg = Pose2D()
-        msg.x = 2.
-        msg.y = 2.
+        msg.x = size_x * resolution - 4
+        msg.y = size_y * resolution - 4
         msg.theta = np.pi / 4
         self.goal_pub.publish(msg)
 
-    def set_trajectory(self, trajectory):
-        """Allow user to set a trajectory [(x, y, theta), ...]."""
-        self.trajectory = trajectory
-        self.current_index = 0
-        self.get_logger().info("Trajectory updated.")
 
 def main(args=None):
     rclpy.init(args=args)
     node = FakeSLAMNode()
-
-    # Example trajectory: Circular motion
-    w = 10
-    trajectory = [(math.cos(t) * 2, math.sin(t) * 2, t) for t in np.linspace(0, 2 * math.pi, 100 * w)]
-    node.set_trajectory(trajectory)
 
     rclpy.spin(node)
     node.destroy_node()

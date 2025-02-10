@@ -5,12 +5,12 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 
 from std_msgs.msg import ColorRGBA
-from geometry_msgs.msg import Point
 from sensor_msgs.msg import LaserScan
 from grid_map_msgs.msg import GridMap
-from go2_dyn_tube_mpc_msg.msg import Trajectory
-from obelisk_estimator_msgs.msg import EstimatedState
+from go2_dyn_tube_mpc_msgs.msg import Trajectory
 from obelisk_control_msgs.msg import VelocityCommand
+from geometry_msgs.msg import Point, TransformStamped
+from obelisk_estimator_msgs.msg import EstimatedState
 from visualization_msgs.msg import Marker, MarkerArray
 
 from obelisk_py.core.utils.ros import spin_obelisk
@@ -22,6 +22,7 @@ from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
 
 import torch
 import numpy as np
+from scipy.io import savemat
 from typing import List, Optional
 
 
@@ -139,6 +140,8 @@ class DynamicTubeMPCNode(ObeliskController):
             msg_type=Marker
         )
 
+        self.last_warn = self.get_clock().now()
+
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Configure the controller."""
         super().on_configure(state)
@@ -204,7 +207,6 @@ class DynamicTubeMPCNode(ObeliskController):
         self.dtmpc.update_nearest_inds(nearest_inds, nearest_dists, map_origin, map_theta)
         self.received_map = True
 
-        from scipy.io import savemat
         savemat("nearest_data.mat", {"nearest_dists": nearest_dists, "nearest_inds": nearest_inds, "map_origin": map_origin, "map_theta": map_theta})
         # raise RuntimeError()
 
@@ -228,6 +230,9 @@ class DynamicTubeMPCNode(ObeliskController):
 
         # Transform points to odom frame
         scan_points = np.dot(H, points_laser)[:2].T  # Extract x, y
+        self.get_logger().info(f"!!!!!!!!!!!!!!!!!! scan_points.shape{scan_points.shape}")
+        # import time
+        # time.sleep(0.1)
         self.dtmpc.update_scan(scan_points)
     
     def transform_to_matrix(self, transform):
@@ -274,8 +279,12 @@ class DynamicTubeMPCNode(ObeliskController):
         """
         # Don't plan if we haven't received a path to follow
         traj_msg = Trajectory()
+        msg_time = self.get_clock().now()
+        traj_msg.header.stamp = msg_time.to_msg()
         if not (self.received_path and self.received_map):
-            self.get_logger().warn(f"Have not recieved path {self.received_path} or map {self.received_map}. Cannot run DTMPC")
+            if (msg_time - self.last_warn).nanoseconds > 1e9:
+                self.get_logger().warn(f"Have not recieved path {self.received_path} or map {self.received_map}. Cannot run DTMPC")
+                self.last_warn = msg_time
             return traj_msg
 
         # Solve the MPC
@@ -290,8 +299,6 @@ class DynamicTubeMPCNode(ObeliskController):
         z, v = self.dtmpc.solve()
 
         # Construct the message
-        msg_time = self.get_clock().now()
-        traj_msg.header.stamp = msg_time.to_msg()
         traj_msg.horizon = self.dtmpc.N
         traj_msg.n = self.dtmpc.n
         traj_msg.m = self.dtmpc.m
@@ -405,7 +412,7 @@ class DynamicTubeMPCNode(ObeliskController):
         return traj_msg
 
     def get_identity_transform(self, parent_frame, child_frame):
-        identity_transform = geometry_msgs.msg.TransformStamped()
+        identity_transform = TransformStamped()
         identity_transform.header.stamp = self.get_clock().now().to_msg()
         identity_transform.header.frame_id = parent_frame
         identity_transform.child_frame_id = child_frame

@@ -5,3 +5,4 @@ scipy
 torch
 torchvision
 torchaudio
+casadi

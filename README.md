@@ -45,36 +45,30 @@ Set logging dir:
 export ROS_HOME=~/sample-contact-walking
 ```
 ## Launch the Go2-Nav stack:
+### Launch the RL velocity controller, with joystick commands
+
 ```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_rl_vel_tracking/share/go2_rl_vel_tracking/config/rl_vel_tracking.yml device_name=onboard```
+
+### Launch a high-level test file (sim only) where MPC trajectory is followed exactly.
 
 ```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/high_level_test.yml device_name=onboard```
 
-Wait for the viz software to connect then run in a seperate terminal:
-```
-obk-activate achilles_sim
-```
+### Launch Dynamic Tube MPC
 
-## Launch the Go2 stack:
-```
-obk-launch config_file_path=${SAMPLE_WALKING_ROOT}/sample_contact_walking/configs/go2_sim_config.yaml device_name=onboard auto_start=configure bag=false
-```
+```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/dynamic_tube_mpc.yml device_name=onboard```
 
-Wait for the viz software to connect then run in a seperate terminal:
-```
-obk-activate go2_sim
-```
+To spoof data provided by SLAM, first run (in a different terminal)
 
-## Launch the G1 stack:
-```
-obk-launch config_file_path=${SAMPLE_WALKING_ROOT}/sample_contact_walking/configs/g1_sim_config.yaml device_name=onboard auto_start=configure bag=false
-```
+```ros2 run testing mimic_slam_robot```
 
-Wait for the viz software to connect then run in a seperate terminal:
-```
-obk-activate g1_sim
-```
+The relevant commands are aliased by 
 
-If you have issues with others on the ROS network then set `ROS_LOCALHOST_ONLY`.
+```launch_go2_rl_vel```
+
+```launch_go2_high_level_test```
+
+```launch_go2_dtmpc```
+
 
 ## Connecting the joystick
 ### USB
@@ -82,7 +76,7 @@ Can verify that the the controller connects via
 ```
 sudo apt-get update
 sudo apt-get install evtest
-sudo evtest /dev/input/eventX
+sudo evtest
 ```
 where you replace eventX with the correct number. You can see these by looking at `/dev/input/`.
 
@@ -90,14 +84,6 @@ Then you may need to change the permissions for the joystick:
 ```
 sudo chmod 666 /dev/input/eventX
 ```
-event24 seems to be consistent for the xbox remote for my machine.
+event21 seems to be consistent for the xbox remote for my machine.
 
 Can run `ros2 run joy joy_enumerate_devices` to see what devices are found.
-
-
-## Random notes
-- As of 10/14/2024 I need to work on the obelisk joystick branch, and until the docker container is re-build with these updates I will need to re-install `ros-humble-joy` from apt-get:
-```
-sudo apt-get install ros-humble-joy
-```
-- As of 11/11/2024 I need to be om the obelisk branch with simulation geom viz

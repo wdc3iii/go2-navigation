@@ -8,17 +8,17 @@ from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Pose2D, Point
 from map_msgs.msg import OccupancyGridUpdate
+from go2_dyn_tube_mpc_msgs.msg import Trajectory
+from obelisk_control_msgs.msg import VelocityCommand
+from obelisk_estimator_msgs.msg import EstimatedState
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Float32MultiArray, MultiArrayLayout, MultiArrayDimension, ColorRGBA
-from go2_dyn_tube_mpc_msg.msg import Trajectory
-from obelisk_estimator_msgs.msg import EstimatedState
-from obelisk_control_msgs.msg import VelocityCommand
 
 from obelisk_py.core.utils.ros import spin_obelisk
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
-from go2_dyn_tube_mpc.go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
+from go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
 
 import time
 import threading 
@@ -118,6 +118,7 @@ class HighLevelPlannerNode(ObeliskController):
             self.pub_nearest_points_callback,
             key="timer_nearest_pts_key"
         )
+        self.last_warn = self.get_clock().now()
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Configure the controller."""
@@ -162,7 +163,10 @@ class HighLevelPlannerNode(ObeliskController):
 
     def pub_nearest_points_callback(self):
         if not self.received_map:
-            self.get_logger().warn("High Level has not received map yet, and cannot compute nearest points.")
+            curr_time = self.get_clock().now()
+            if (curr_time - self.last_warn).nanoseconds > 1e9:
+                self.last_warn = curr_time
+                self.get_logger().warn("High Level has not received map yet, and cannot compute nearest points.")
             return
         
         try:
@@ -281,7 +285,7 @@ class HighLevelPlannerNode(ObeliskController):
             return traj_msg
         
         t0 = time.perf_counter_ns()
-        path, cost, frontiers, info = self.explorer.find_frontiers_to_goal(np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y, 0]), self.goal_pose, self.downsample)
+        path, cost, frontiers, info = self.explorer.find_frontiers_to_goal(np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y, 0]), self.goal_pose)
         self.get_logger().info(f"Astar solve took {(time.perf_counter_ns() - t0) * 1e-9}\tResult: {info}")
 
         if info == self.explorer.PATH_START_NOT_FREE:

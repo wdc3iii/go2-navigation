@@ -114,7 +114,7 @@ onboard:
           timer_period_sec: 0.05
           callback_group: None
   # ----- Tracking Controller ----- #
-    - pkg: go2_dynamic_tube_mpc
+    - pkg: go2_dyn_tube_mpc
       executable: trajectory_tracker
       # callback_groups:
       publishers:
@@ -214,29 +214,29 @@ onboard:
   # sensing:
   robot:
     # === simulation ===
-    # - is_simulated: True
-      # pkg: obelisk_unitree_cpp
-      # executable: obelisk_unitree_sim
-      # params:
-      #   ic_keyframe: standing_isaac
-    # === hardware ===
-    - is_simulated: False
+    - is_simulated: True
       pkg: obelisk_unitree_cpp
-      executable: obelisk_unitree_go2_hardware
+      executable: obelisk_unitree_sim
       params:
-        network_interface_name: enx001cc24ce09a
-        default_kp: [
-                    25., 25., 25.,    # FR
-                    25., 25., 25.,    # FL
-                    25., 25., 25.,    # RR
-                    25., 25., 25.,    # RL
-                    ]
-        default_kd: [
-                    0.5, 0.5, 0.5,    # FR
-                    0.5, 0.5, 0.5,    # FL
-                    0.5, 0.5, 0.5,    # RR
-                    0.5, 0.5, 0.5,    # RL
-        ]
+        ic_keyframe: standing_isaac
+    # === hardware ===
+    # - is_simulated: False
+    #   pkg: obelisk_unitree_cpp
+    #   executable: obelisk_unitree_go2_hardware
+    #   params:
+    #     network_interface_name: enx001cc24ce09a
+    #     default_kp: [
+    #                 25., 25., 25.,    # FR
+    #                 25., 25., 25.,    # FL
+    #                 25., 25., 25.,    # RR
+    #                 25., 25., 25.,    # RL
+    #                 ]
+    #     default_kd: [
+    #                 0.5, 0.5, 0.5,    # FR
+    #                 0.5, 0.5, 0.5,    # FL
+    #                 0.5, 0.5, 0.5,    # RR
+    #                 0.5, 0.5, 0.5,    # RL
+    #     ]
     # ==================
       # callback_groups:
       publishers:
