@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.ndimage import distance_transform_edt
 import matplotlib.transforms as mtransforms
+from scipy.ndimage import distance_transform_edt
 
 
 def map_to_pose(map_inds, map_origin, map_theta, resolution):

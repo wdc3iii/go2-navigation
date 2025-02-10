@@ -1,9 +1,11 @@
-import numpy as np
+from go2_dyn_tube_mpc.map_utils import MapUtils
+
 import heapq
 import random
-from go2_dyn_tube_mpc.map_utils import MapUtils
-from scipy.ndimage import binary_dilation
+import numpy as np
 import threading
+from scipy.ndimage import binary_dilation
+
 
 class HighLevelPlanner:
 

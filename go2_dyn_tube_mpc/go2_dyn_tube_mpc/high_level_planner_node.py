@@ -1,28 +1,29 @@
-from typing import List, Optional
-
-import tf2_ros
-from rclpy.executors import MultiThreadedExecutor
 import rclpy
+import tf2_ros
 from rclpy.duration import Duration
-from obelisk_py.core.utils.ros import spin_obelisk
-import numpy as np
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
+
+from grid_map_msgs.msg import GridMap
+from nav_msgs.msg import OccupancyGrid
+from geometry_msgs.msg import Pose2D, Point
+from map_msgs.msg import OccupancyGridUpdate
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import Float32MultiArray, MultiArrayLayout, MultiArrayDimension, ColorRGBA
 from go2_dyn_tube_mpc_msg.msg import Trajectory
 from obelisk_estimator_msgs.msg import EstimatedState
 from obelisk_control_msgs.msg import VelocityCommand
-from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 
+from obelisk_py.core.utils.ros import spin_obelisk
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
 from go2_dyn_tube_mpc.go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
-from geometry_msgs.msg import Pose2D, Point
-from grid_map_msgs.msg import GridMap
-from nav_msgs.msg import OccupancyGrid
-from map_msgs.msg import OccupancyGridUpdate
-from std_msgs.msg import Float32MultiArray, MultiArrayLayout, MultiArrayDimension, ColorRGBA
-from visualization_msgs.msg import Marker, MarkerArray
+
 import time
 import threading 
+import numpy as np
+from typing import List, Optional
 
 
 class HighLevelPlannerNode(ObeliskController):

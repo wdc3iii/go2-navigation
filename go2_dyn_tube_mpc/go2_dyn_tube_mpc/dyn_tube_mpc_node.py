@@ -1,25 +1,28 @@
-from typing import List, Optional
-from rclpy.duration import Duration
 import rclpy
 import tf2_ros
+from rclpy.duration import Duration
 from rclpy.executors import SingleThreadedExecutor
-from obelisk_py.core.utils.ros import spin_obelisk
-import numpy as np
+from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
+
+from std_msgs.msg import ColorRGBA
+from geometry_msgs.msg import Point
+from sensor_msgs.msg import LaserScan
+from grid_map_msgs.msg import GridMap
 from go2_dyn_tube_mpc_msg.msg import Trajectory
 from obelisk_estimator_msgs.msg import EstimatedState
 from obelisk_control_msgs.msg import VelocityCommand
-from grid_map_msgs.msg import GridMap
-from sensor_msgs.msg import LaserScan
-import geometry_msgs.msg
-from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import Point
-from std_msgs.msg import ColorRGBA
+
+from obelisk_py.core.utils.ros import spin_obelisk
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
+
 from go2_dyn_tube_mpc.map_utils import map_to_pose
-import torch
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
+
+import torch
+import numpy as np
+from typing import List, Optional
 
 
 class DynamicTubeMPCNode(ObeliskController):

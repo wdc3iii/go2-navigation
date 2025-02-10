@@ -1,8 +1,10 @@
+from go2_dyn_tube_mpc.map_utils import map_to_pose, pose_to_map
+
 import numpy as np
 import casadi as ca
 from scipy.spatial import KDTree
-from go2_dyn_tube_mpc.map_utils import map_to_pose, pose_to_map
 from scipy.interpolate import interp1d
+
 
 class DynamicTubeMPC:
     

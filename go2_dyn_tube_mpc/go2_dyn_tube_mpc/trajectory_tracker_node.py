@@ -1,16 +1,21 @@
-from typing import List, Optional
-from rclpy.duration import Duration
 import rclpy
 import tf2_ros
+from rclpy.duration import Duration
 from rclpy.executors import SingleThreadedExecutor
-from obelisk_py.core.utils.ros import spin_obelisk
+from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
+
 from go2_dyn_tube_mpc_msg.msg import Trajectory
 from obelisk_control_msgs.msg import VelocityCommand
-from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
+
+from obelisk_py.core.utils.ros import spin_obelisk
 from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
-import numpy as np
+
 from go2_dyn_tube_mpc.trajectory_tracker import track_trajectory
+
+import numpy as np
+from typing import List, Optional
+
 
 class TrajectoryTracker(ObeliskController):
     """Trajectory Tracker.
