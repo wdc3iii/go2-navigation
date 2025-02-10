@@ -58,6 +58,7 @@ ENV OBELISK_ROOT=/home/${USER}/obelisk
 # run docker setup script in Dockerfile
 WORKDIR /home/${USER}
 RUN source /home/${USER}/obelisk/setup.sh --install-sys-deps --cyclone-perf --obk-aliases --basic
+RUN sudo apt update && sudo apt install ros-humble-grid-map-msgs
 
 # Set up python environment
 WORKDIR /home/${USER}/repos/go2-navigation
