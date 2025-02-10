@@ -57,9 +57,9 @@ export ROS_HOME=~/sample-contact-walking
 
 ```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/dynamic_tube_mpc.yml device_name=onboard```
 
-To spoof data provided by SLAM, first run (in a different terminal)
+To spoof data provided by SLAM, first run (in a different terminal, `use_robot_sim=True` to follow MuJoCo simulation, `False` to follow MPC exactly.)
 
-```ros2 run testing mimic_slam_robot```
+```ros2 run testing mimic_slam_robot --ros-args -p use_robot_sim=True```
 
 The relevant commands are aliased by 
 

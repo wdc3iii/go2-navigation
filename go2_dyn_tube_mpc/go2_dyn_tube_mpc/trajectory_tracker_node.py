@@ -75,7 +75,7 @@ class TrajectoryTracker(ObeliskController):
         traj_msg = VelocityCommand()
         msg_time = self.get_clock().now()
         traj_msg.header.stamp = msg_time.to_msg()
-        if not self.t_path:
+        if self.t_path is None:
             if (msg_time - self.last_warn).nanoseconds > 1e9:
                 self.get_logger().warn("Have not recieved path. Cannot run Tracking Controller.")
                 self.last_warn = msg_time

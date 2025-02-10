@@ -42,6 +42,7 @@ class FakeSLAMNode(Node):
         self.declare_parameter('scan_range', 2000.0)  # LIDAR range
         self.declare_parameter('scan_resolution', 0.1)  # Scan angle step
         self.declare_parameter('drift_rate', 0.001)  # Drift per second
+        self.declare_parameter('use_robot_sim', False)  # Whether to listen to robot simulation or just execute mpc.
 
         # Publishers
         self.map_pub = self.create_publisher(OccupancyGrid, '/map', 1)
@@ -54,7 +55,6 @@ class FakeSLAMNode(Node):
 
         # TF Broadcasters
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
-        self.recieved_sim_robot = False
 
         # TF Offsets
         self.map_to_odom_x = 0.0
@@ -173,8 +173,7 @@ class FakeSLAMNode(Node):
             v0[0] * np.sin(self.z[2]) + v0[1] * np.cos(self.z[2]),
             v0[2]
         ]) * (t[1] - t[0])
-        if not self.recieved_sim_robot:
-            self.sense()
+        self.sense()
 
     def robot_sim_callback(self, msg):
         self.z_robot = np.array([
@@ -182,7 +181,6 @@ class FakeSLAMNode(Node):
             msg.position.y,
             quat2yaw([msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w])
         ])
-        self.recieved_sim_robot = True
 
     def publish_tf(self):
         """Publish TF transforms with drift in map->odom."""
@@ -203,30 +201,24 @@ class FakeSLAMNode(Node):
         tf_map_odom.transform.rotation.z = math.sin(self.map_to_odom_theta / 2)
         tf_map_odom.transform.rotation.w = math.cos(self.map_to_odom_theta / 2)
 
+        tf_odom_base = TransformStamped()
+        tf_odom_base.header.stamp = now
+        tf_odom_base.header.frame_id = "odom"
+        tf_odom_base.child_frame_id = "base_link"
+        
         # Publish odom->base_link (True pose)
-        if not self.recieved_sim_robot:
-            tf_odom_base = TransformStamped()
-            tf_odom_base.header.stamp = now
-            tf_odom_base.header.frame_id = "odom"
-            tf_odom_base.child_frame_id = "base_link"
-            tf_odom_base.transform.translation.x = self.z[0]
-            tf_odom_base.transform.translation.y = self.z[1]
-            tf_odom_base.transform.rotation.z = math.sin(self.z[2] / 2)
-            tf_odom_base.transform.rotation.w = math.cos(self.z[2] / 2)
-
-            self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
-        elif self.recieved_sim_robot:
-            tf_odom_base = TransformStamped()
-            tf_odom_base.header.stamp = now
-            tf_odom_base.header.frame_id = "odom"
-            tf_odom_base.child_frame_id = "base_link"
+        if self.get_parameter('use_robot_sim').value:
             tf_odom_base.transform.translation.x = self.z_robot[0]
             tf_odom_base.transform.translation.y = self.z_robot[1]
             tf_odom_base.transform.rotation.z = math.sin(self.z_robot[2] / 2)
             tf_odom_base.transform.rotation.w = math.cos(self.z_robot[2] / 2)
-            self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
-        else:
-            self.tf_broadcaster.sendTransform([tf_map_odom])
+        else:            
+            tf_odom_base.transform.translation.x = self.z[0]
+            tf_odom_base.transform.translation.y = self.z[1]
+            tf_odom_base.transform.rotation.z = math.sin(self.z[2] / 2)
+            tf_odom_base.transform.rotation.w = math.cos(self.z[2] / 2)
+        
+        self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
 
     def publish_goal_pose(self):
         size_y, size_x = self.get_parameter('map_size').value

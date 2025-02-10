@@ -1,4 +1,4 @@
-config: high_level_test
+config: dynamic_tube_mpc
 onboard:
   control:
   # ----- High Level Controller ----- #
