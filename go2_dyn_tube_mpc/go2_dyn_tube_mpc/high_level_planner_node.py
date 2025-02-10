@@ -119,11 +119,11 @@ class HighLevelPlannerNode(ObeliskController):
             key="timer_nearest_pts_key"
         )
         self.last_warn = self.get_clock().now()
+        self.get_logger().info("High Level Planning node constructor complete.")
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Configure the controller."""
         super().on_configure(state)
-
         return TransitionCallbackReturn.SUCCESS
 
     def update_x_hat(self, x_hat_msg: EstimatedState) -> None:

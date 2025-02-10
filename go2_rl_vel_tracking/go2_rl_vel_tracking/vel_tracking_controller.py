@@ -88,6 +88,7 @@ class VelocityTrackingController(ObeliskController):
         )
 
         self.get_logger().info(f"Policy: {policy_path} loaded on {self.device}. {len(self.kps)}, {len(self.kds)}")
+        self.get_logger().info("RL Velocity Tracking node constructor complete.")
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:
         """Configure the controller."""

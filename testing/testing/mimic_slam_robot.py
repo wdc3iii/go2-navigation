@@ -38,7 +38,7 @@ class FakeSLAMNode(Node):
         super().__init__('fake_slam')
 
         # Parameters
-        self.declare_parameter('problem_ind', 1)  # Whether to listen to robot simulation or just execute mpc.
+        self.declare_parameter('problem_ind', 1)  # 0 -> large problem; 1 -> small SLAM mockup 2 -> small /scan mockup
         prob_ind = self.get_parameter('problem_ind').value
         if prob_ind == 0:
             map_size = [400, 1000]
@@ -127,14 +127,14 @@ class FakeSLAMNode(Node):
             self.goal_pose = np.array([size_x * resolution - 2, size_y * resolution - 2, np.pi / 4])
 
         elif problem_ind == 1 or problem_ind == 2:
-            self.set_parameters([Parameter('map_size'), Parameter.Type.INTEGER_ARRAY, [60, 60]])
-            self.occ_gt = np.ones((60, 60)) * FREE
+            size_x, size_y = self.get_parameter('map_size').value
+            self.occ_gt = np.ones((size_y, size_x)) * FREE
             self.occ_gt[:, [0, -1]] = OCCUPIED
             self.occ_gt[[0, -1], :] = OCCUPIED
             self.map_origin = np.array([-0.75, -0.75])
             self.goal_pose = np.array([1.25, 1.25, np.pi / 2])
             if problem_ind == 1:
-                self.occ_gt[24:28, 24:28] = OCCUPIED
+                self.occ_gt[24:32, 24:32] = OCCUPIED
                 self.map = np.ones_like(self.occ_gt) * UNCERTAIN
             else:
                 self.map = self.occ_gt.copy()
@@ -187,6 +187,7 @@ class FakeSLAMNode(Node):
 
         self.map_update_pub.publish(update)
 
+    @staticmethod
     def ray_intersect_segment(p1, p2, p3, d):
         M = np.hstack([-p3[:, None], p2[:, None] - p1[:, None]])
         b = d - p1
@@ -208,13 +209,13 @@ class FakeSLAMNode(Node):
         scan_msg.angle_min = -math.pi
         scan_msg.angle_max = math.pi
         scan_msg.angle_increment = self.get_parameter('scan_resolution').value
-        scan_msg.range_min = 0.1
+        scan_msg.range_min = 0.05
         scan_msg.range_max = self.get_parameter('scan_range').value
 
         num_readings = int((scan_msg.angle_max - scan_msg.angle_min) / scan_msg.angle_increment)
         
 
-        prob_ind = self.get_parameter('prob_ind').value
+        prob_ind = self.get_parameter('problem_ind').value
         
         if prob_ind == 2:
             z_sense = None
@@ -223,10 +224,10 @@ class FakeSLAMNode(Node):
             else:
                 z_sense = self.z
             obs = [
-                (1.3, 1.3, 1.3, 1.8),
-                (1.3, 1.8, 1.8, 1.8),
-                (1.8, 1.8, 1.8, 1.3),
-                (1.8, 1.3, 1.3, 1.3)
+                (0.7, 0.7, 0.7, 1.2),
+                (0.7, 1.2, 1.2, 1.2),
+                (1.2, 1.2, 1.2, 0.7),
+                (1.2, 0.7, 0.7, 0.7)
             ]
             ranges = []
             for angle in np.linspace(scan_msg.angle_min, scan_msg.angle_max, num_readings):

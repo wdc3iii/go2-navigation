@@ -49,6 +49,7 @@ class TrajectoryTracker(ObeliskController):
         assert np.all(self.v_max > 0) and np.all(self.v_min <= 0)
 
         self.last_warn = self.get_clock().now()
+        self.get_logger().info("Tracjectory tracking node constructor complete.")
 
 
     def on_configure(self, state: LifecycleState) -> TransitionCallbackReturn:

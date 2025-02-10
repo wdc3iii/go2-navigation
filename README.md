@@ -45,17 +45,20 @@ Set logging dir:
 export ROS_HOME=~/sample-contact-walking
 ```
 ## Launch the Go2-Nav stack:
+
+This stack can occassionally struggle to launch if launched directly to activate (sometimes High Level Planner or DTMPC nodes will be triggered to activate before being triggered to configure). To prevent this, run this to `auto_start=configure`, and then in another terminal run `obk-activate <config_name>` to activate all the nodes.
+
 ### Launch the RL velocity controller, with joystick commands
 
-```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_rl_vel_tracking/share/go2_rl_vel_tracking/config/rl_vel_tracking.yml device_name=onboard```
+```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_rl_vel_tracking/share/go2_rl_vel_tracking/config/rl_vel_tracking.yml device_name=onboard auto_start=configure```
 
 ### Launch a high-level test file (sim only) where MPC trajectory is followed exactly.
 
-```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/high_level_test.yml device_name=onboard```
+```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/high_level_test.yml device_name=onboard auto_start=configure```
 
 ### Launch Dynamic Tube MPC
 
-```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/dynamic_tube_mpc.yml device_name=onboard```
+```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/dynamic_tube_mpc.yml device_name=onboard auto_start=configure```
 
 To spoof data provided by SLAM, first run (in a different terminal, `use_robot_sim=True` to follow MuJoCo simulation, `False` to follow MPC exactly.)
 
