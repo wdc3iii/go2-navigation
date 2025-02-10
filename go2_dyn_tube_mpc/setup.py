@@ -29,7 +29,8 @@ setup(
     entry_points={
         'console_scripts': [
             'dyn_tube_mpc = go2_dyn_tube_mpc.dyn_tube_mpc_node:main',
-            'high_level_planner = go2_dyn_tube_mpc.high_level_planner:main'
+            'high_level_planner = go2_dyn_tube_mpc.high_level_planner_node:main'
+            'trajectory_tracker = go2_dyn_tube_mpc.trajectory_tracker_node:main'
         ],
     },
 )

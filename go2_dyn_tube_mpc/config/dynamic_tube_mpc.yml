@@ -25,11 +25,12 @@ onboard:
           topic: /obelisk/go2/nearest_points
           history_depth: 1
           callback_group: mpc_constraint
-        # ----- Visualization Publisher ----- #
+        # ----- Path Visualization Publisher ----- #
         - ros_parameter: pub_viz_setting
           topic: /obelisk/go2/a_star_viz
           history_depth: 1
           callback_group: a_star
+        # ----- Frontier Visualization Publisher ----- #
         - ros_parameter: pub_front_setting
           topic: /obelisk/go2/frontiers
           history_depth: 1
@@ -67,36 +68,43 @@ onboard:
       executable: dyn_tube_mpc
       # callback_groups:
       publishers:
+        # ----- MPC Control Publisher ----- #
         - ros_parameter: pub_ctrl_setting
           topic: /obelisk/go2/dtmpc_path
           history_depth: 1
           callback_group: None
-        # ----- Visualization Publisher ----- #
+        # ----- Path Visualization Publisher ----- #
         - ros_parameter: pub_viz_setting
           topic: /obelisk/go2/dtmpc_viz
           history_depth: 1
           callback_group: None
+        # ----- Constraint Visualization Publisher ----- #
         - ros_parameter: pub_constraint_setting
           topic: /obelisk/go2/dtmpc_constraint
           history_depth: 1
           callback_group: None
       subscribers:
+        # ----- Estimation Subscriber ----- #
         - ros_parameter: sub_est_setting
           topic: /obelisk/go2/est_state
           history_depth: 1
           callback_group: None
+        # ----- Astar Plan Subscriber ----- #
         - ros_parameter: sub_plan_setting
           topic: /obelisk/go2/a_star_path
           history_depth: 1
           callback_group: None
+        # ----- Velocity Limit Subscriber ----- #
         - ros_parameter: sub_vel_lim_setting
           topic: /obelisk/go2/dtmpc_vel_lim
           history_depth: 1
           callback_group: None
+        # ----- Constraint (Map) Subscriber ----- #
         - ros_parameter: sub_nearest_points_setting
           topic: /obelisk/go2/nearest_points
           history_depth: 1
           callback_group: None
+        # ----- Constraint (Scan) Subscriber ----- #
         - ros_parameter: sub_scan_setting
           topic: /scan
           history_depth: 1
@@ -104,6 +112,79 @@ onboard:
       timers:
         - ros_parameter: timer_ctrl_setting
           timer_period_sec: 0.05
+          callback_group: None
+  # ----- Tracking Controller ----- #
+    - pkg: go2_dynamic_tube_mpc
+      executable: trajectory_tracker
+      # callback_groups:
+      publishers:
+        # ----- Control Publisher ----- #
+        - ros_parameter: pub_ctrl_setting
+          topic: /obelisk/go2/vel_ctrl
+          history_depth: 10
+          callback_group: None
+      subscribers:
+        # ----- Path Subscriber ----- #
+        - ros_parameter: sub_est_setting
+          topic: /obelisk/go2/dtmpc_path
+          history_depth: 10
+          callback_group: None
+      timers:
+        - ros_parameter: timer_ctrl_setting
+          timer_period_sec: 0.02
+          callback_group: None
+  # ----- Low Level Controller ----- #
+    - pkg: go2_rl_vel_tracking
+      params:
+        policy_path: "/home/wcompton/IsaacLab/logs/rsl_rl/unitree_go2_flat/2025-02-09_17-46-38/exported/policy.pt"
+        action_scale: 0.25
+      executable: vel_tracking_controller
+      # callback_groups:
+      publishers:
+        # ----- Control Publisher ----- #
+        - ros_parameter: pub_ctrl_setting
+          topic: /obelisk/go2/ctrl
+          history_depth: 10
+          callback_group: None
+      subscribers:
+        # ----- Estimation Subscriber ----- #
+        - ros_parameter: sub_est_setting
+          topic: /obelisk/go2/est_state
+          history_depth: 10
+          callback_group: None
+        # ----- Joystick subscriber ----- #
+        - ros_parameter: sub_vel_cmd_setting
+          topic: /obelisk/go2/vel_ctrl
+          history_depth: 10
+          callback_group: None
+      timers:
+        - ros_parameter: timer_ctrl_setting
+          timer_period_sec: 0.02
+          callback_group: None
+  # ----- High Level/Execution FSM Controller ----- #
+    - pkg: obelisk_unitree_cpp
+      executable: obelisk_unitree_joystick
+      params:
+        send_joystick: False
+      # callback_groups:
+      publishers:
+      # ----- Execution FSM ----- #
+        - ros_parameter: pub_exec_fsm_setting
+          topic: /obelisk/go2/exec_fsm
+          history_depth: 10
+          callback_group: None
+      # ----- High Level Control ----- #
+        - ros_parameter: pub_ctrl_setting
+          topic: /obelisk/go2/vel_ctrl
+          history_depth: 10
+          callback_group: None
+      subscribers:
+      # ----- Joystick subscriber ----- #
+        - ros_parameter: sub_est_setting
+          topic: /obelisk/go2/joy
+      timers:
+        - ros_parameter: timer_ctrl_setting
+          timer_period_sec: 100  # Control callback is not being used
           callback_group: None
   estimation:
     - pkg: obelisk_unitree_cpp
@@ -133,59 +214,59 @@ onboard:
   # sensing:
   robot:
     # === simulation ===
-    - is_simulated: True
-      pkg: obelisk_unitree_cpp
-      executable: obelisk_unitree_sim
-      params:
-        ic_keyframe: standing_isaac
+    # - is_simulated: True
+      # pkg: obelisk_unitree_cpp
+      # executable: obelisk_unitree_sim
+      # params:
+      #   ic_keyframe: standing_isaac
     # === hardware ===
-    # - is_simulated: False
-    #   pkg: obelisk_unitree_cpp
-    #   executable: obelisk_unitree_go2_hardware
-    #   params:
-    #     network_interface_name: enx001cc24ce09a
-    #     default_kp: [
-    #                 60., 60., 60.,    # FR
-    #                 60., 60., 60.,    # FL
-    #                 60., 60., 60.,    # RR
-    #                 60., 60., 60.,    # RL
-    #                 ]
-    #     default_kd: [
-    #                 5., 5., 5.,    # FR
-    #                 5., 5., 5.,    # FL
-    #                 5., 5., 5.,    # RR
-    #                 5., 5., 5.,    # RL
-    #     ]
+    - is_simulated: False
+      pkg: obelisk_unitree_cpp
+      executable: obelisk_unitree_go2_hardware
+      params:
+        network_interface_name: enx001cc24ce09a
+        default_kp: [
+                    25., 25., 25.,    # FR
+                    25., 25., 25.,    # FL
+                    25., 25., 25.,    # RR
+                    25., 25., 25.,    # RL
+                    ]
+        default_kd: [
+                    0.5, 0.5, 0.5,    # FR
+                    0.5, 0.5, 0.5,    # FL
+                    0.5, 0.5, 0.5,    # RR
+                    0.5, 0.5, 0.5,    # RL
+        ]
     # ==================
       # callback_groups:
       publishers:
       # ----- Joints ----- #
         - ros_parameter: pub_sensor_setting
           topic: /obelisk/go2/joint_encoders
-          history_depth: 10
+          history_depth: 1
       # ----- IMU ----- #
         - ros_parameter: pub_imu_setting
           topic: /obelisk/go2/torso_imu
-          history_depth: 10
+          history_depth: 1
       # ----- Odom ----- #
-        # - ros_parameter: pub_odom_setting
-        #   topic: /obelisk/go2/odom
-        #   history_depth: 10
+        - ros_parameter: pub_odom_setting
+          topic: /obelisk/go2/odom
+          history_depth: 1
       subscribers:
       # ----- Control ----- #
         - ros_parameter: sub_ctrl_setting
           topic: /obelisk/go2/ctrl
-          history_depth: 10
+          history_depth: 1
           callback_group: None
       # ----- Execution FSM ----- #
         - ros_parameter: sub_fsm_setting
           topic: /obelisk/go2/exec_fsm
-          history_depth: 10
+          history_depth: 1
           callback_group: None
       # ----- High Level Control ----- #
         - ros_parameter: sub_high_level_ctrl_setting
           topic: /obelisk/go2/high_level_ctrl
-          history_depth: 10
+          history_depth: 1
           callback_group: None
       sim:
         - ros_parameter: mujoco_setting
@@ -248,7 +329,7 @@ onboard:
               base_mocap_quat_sensor: framequat
       timers:
         - ros_parameter: timer_sensor_setting
-          timer_period_sec: 0.02
+          timer_period_sec: 0.01
           callback_group: None
   viz:
     on: True

@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 
-from go2_dyn_tube_mpc.exploration import Exploration
+from go2_dyn_tube_mpc.go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
 import numpy as np
 
 FREE = 0
@@ -39,7 +39,7 @@ y2 = int(occ_y_max / res)
 ros_map[y1:y2, x1:x2] = UNCERTAIN
 
 robot_radius = 0.15
-map_handler = Exploration(robot_radius=round(robot_radius / res), free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED)
+map_handler = HighLevelPlanner(robot_radius=round(robot_radius / res), free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED)
 map_handler.set_map(ros_map, np.array([0, 0, 0]), res)
 
 _, ax = plt.subplots()

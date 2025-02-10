@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import random
-from go2_dyn_tube_mpc.exploration import Exploration
+from go2_dyn_tube_mpc.go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
 from scipy.ndimage import zoom
 import time
 import threading
@@ -76,7 +76,7 @@ if __name__ == '__main__':
         [FREE, FREE, UNCERTAIN, UNCERTAIN, UNCERTAIN]
     ])
 
-    front = Exploration(threading.Lock(), threading.Lock(), 1, free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED, robot_radius=1)
+    front = HighLevelPlanner(threading.Lock(), threading.Lock(), 1, free=FREE, uncertain=UNCERTAIN, occupied=OCCUPIED, robot_radius=1)
     front.set_map(np.ones_like(occ_grid_gt) * UNCERTAIN, (0, 0, 0), 0.1)
     front.update_map(np.ones((2, 3)) * OCCUPIED, (1, 0))
     # start = None

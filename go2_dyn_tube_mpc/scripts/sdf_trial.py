@@ -1,7 +1,7 @@
 from scripts.dynamic_tube_mpc_sdf import DynamicTubeMPC
 import numpy as np
 import matplotlib.pyplot as plt
-from go2_dyn_tube_mpc.exploration import Exploration
+from go2_dyn_tube_mpc.go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
 import time
 
 if __name__ == "__main__":
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     z_f = np.array([1.75, 1.75, 0.])
 
     # Create graph solve
-    explorer = Exploration(3, free=0, uncertain=1, occupied=2)
+    explorer = HighLevelPlanner(3, free=0, uncertain=1, occupied=2)
     explorer.set_map(occ_grid, (0, 0, 0), res)
 
     start = explorer.map.pose_to_map(z_i[:2])
