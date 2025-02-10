@@ -1,6 +1,7 @@
 import rclpy
 import tf2_ros
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid
@@ -37,12 +38,25 @@ class FakeSLAMNode(Node):
         super().__init__('fake_slam')
 
         # Parameters
-        self.declare_parameter('map_size', [400, 1000])  # Grid size
+        self.declare_parameter('problem_ind', 1)  # Whether to listen to robot simulation or just execute mpc.
+        prob_ind = self.get_parameter('problem_ind').value
+        if prob_ind == 0:
+            map_size = [400, 1000]
+            sense_size = [75, 90]
+        elif prob_ind == 1 or prob_ind == 2:
+            map_size = [60, 60]
+            sense_size = [15, 15]
+            scan_range = 2000.0 if prob_ind == 1 else 3.5
+        else:
+            raise ValueError(f"ROS2 parameter problem_ind {prob_ind} unrecognized.")
+        self.declare_parameter('map_size', map_size)  # Grid size
+        self.declare_parameter('sense_size', sense_size)  # Grid size
         self.declare_parameter('resolution', 0.05)  # Map resolution
-        self.declare_parameter('scan_range', 2000.0)  # LIDAR range
+        self.declare_parameter('scan_range', scan_range)  # LIDAR range
         self.declare_parameter('scan_resolution', 0.1)  # Scan angle step
         self.declare_parameter('drift_rate', 0.001)  # Drift per second
         self.declare_parameter('use_robot_sim', False)  # Whether to listen to robot simulation or just execute mpc.
+        
 
         # Publishers
         self.map_pub = self.create_publisher(OccupancyGrid, '/map', 1)
@@ -62,7 +76,6 @@ class FakeSLAMNode(Node):
         self.map_to_odom_theta = 0.0
 
         # Simulated Map
-        self.map_origin = np.array([-2, -2])
         self.z = np.zeros((3,))
         self.z_robot = np.zeros((3,))
         self.generate_fake_map()
@@ -103,10 +116,31 @@ class FakeSLAMNode(Node):
 
     def generate_fake_map(self):
         """Generate a simple occupancy grid."""
-        size_x, size_y = self.get_parameter('map_size').value
-        self.occ_gt = zoom(self.generate_maze(size_y // 40, size_x // 40), 40, order=0)
-        self.map = np.ones_like(self.occ_gt) * UNCERTAIN
-        # self.map = self.occ_gt.copy()
+        problem_ind = self.get_parameter("problem_ind").value
+        if problem_ind == 0:
+            size_x, size_y = self.get_parameter('map_size').value
+            self.occ_gt = zoom(self.generate_maze(size_y // 40, size_x // 40), 40, order=0)
+            self.map = np.ones_like(self.occ_gt) * UNCERTAIN
+            self.map_origin = np.array([-2, -2])
+
+            resolution = self.get_parameter('resolution').value
+            self.goal_pose = np.array([size_x * resolution - 2, size_y * resolution - 2, np.pi / 4])
+
+        elif problem_ind == 1 or problem_ind == 2:
+            self.set_parameters([Parameter('map_size'), Parameter.Type.INTEGER_ARRAY, [60, 60]])
+            self.occ_gt = np.ones((60, 60)) * FREE
+            self.occ_gt[:, [0, -1]] = OCCUPIED
+            self.occ_gt[[0, -1], :] = OCCUPIED
+            self.map_origin = np.array([-0.75, -0.75])
+            self.goal_pose = np.array([1.25, 1.25, np.pi / 2])
+            if problem_ind == 1:
+                self.occ_gt[24:28, 24:28] = OCCUPIED
+                self.map = np.ones_like(self.occ_gt) * UNCERTAIN
+            else:
+                self.map = self.occ_gt.copy()
+
+        else:
+            raise ValueError(f'ROS2 parameter problem_ind {problem_ind} not recognized.')
         self.sense()
 
     def publish_map(self):
@@ -133,10 +167,11 @@ class FakeSLAMNode(Node):
             z_sense = self.z
         x_c, y_c = pose_to_map(z_sense[:2], self.map_origin + np.array([self.map_to_odom_x, self.map_to_odom_y]), self.map_to_odom_theta, self.get_parameter('resolution').value)
         
-        x1 = max(0, x_c - 75)
-        x2 = min(self.get_parameter("map_size").value[1], x_c + 75)
-        y1 = max(0, y_c - 90)
-        y2 = min(self.get_parameter("map_size").value[1], y_c + 90)
+        sense_x, sense_y = self.get_parameter('sense_size').value
+        x1 = max(0, x_c - sense_x)
+        x2 = min(self.get_parameter("map_size").value[1], x_c + sense_x)
+        y1 = max(0, y_c - sense_y)
+        y2 = min(self.get_parameter("map_size").value[1], y_c + sense_y)
 
         update = OccupancyGridUpdate()
         update.header.stamp = self.get_clock().now().to_msg()
@@ -152,6 +187,18 @@ class FakeSLAMNode(Node):
 
         self.map_update_pub.publish(update)
 
+    def ray_intersect_segment(p1, p2, p3, d):
+        M = np.hstack([-p3[:, None], p2[:, None] - p1[:, None]])
+        b = d - p1
+        if np.linalg.cond(M) < 0.0001:
+            return None
+        else:
+            alpha = np.linalg.solve(M, b)
+            if alpha[0] < 0 or alpha[1] < 0 or alpha[1] > 1:
+                return np.inf
+            else:
+                return alpha[0]
+
     def publish_scan(self):
         """Publish a fake LIDAR scan."""
         # Get robot pose
@@ -165,7 +212,35 @@ class FakeSLAMNode(Node):
         scan_msg.range_max = self.get_parameter('scan_range').value
 
         num_readings = int((scan_msg.angle_max - scan_msg.angle_min) / scan_msg.angle_increment)
-        scan_msg.ranges = [scan_msg.range_max / 2] * num_readings  # Simulated LIDAR scan
+        
+
+        prob_ind = self.get_parameter('prob_ind').value
+        
+        if prob_ind == 2:
+            z_sense = None
+            if self.get_parameter('use_robot_sim').value:
+                z_sense = self.z_robot
+            else:
+                z_sense = self.z
+            obs = [
+                (1.3, 1.3, 1.3, 1.8),
+                (1.3, 1.8, 1.8, 1.8),
+                (1.8, 1.8, 1.8, 1.3),
+                (1.8, 1.3, 1.3, 1.3)
+            ]
+            ranges = []
+            for angle in np.linspace(scan_msg.angle_min, scan_msg.angle_max, num_readings):
+                total_angle = angle + z_sense[2]
+                min_ray = np.inf
+                for x1, x2, y1, y2 in obs:
+                    ray = self.ray_intersect_segment(np.array([x1, y1]), np.array([x2, y2]), np.array([np.cos(total_angle), np.sin(total_angle)]), z_sense[:2])
+                    if ray is not None and ray < min_ray:
+                        min_ray = ray
+                ranges.append(min(min_ray, scan_msg.range_max))
+
+            scan_msg.ranges = ranges 
+        else:
+            scan_msg.ranges = [scan_msg.range_max / 2] * num_readings  # Simulated LIDAR scan
         self.scan_pub.publish(scan_msg)
 
     def trajectory_callback(self, msg):
@@ -226,12 +301,10 @@ class FakeSLAMNode(Node):
         self.tf_broadcaster.sendTransform([tf_map_odom, tf_odom_base])
 
     def publish_goal_pose(self):
-        size_y, size_x = self.get_parameter('map_size').value
-        resolution = self.get_parameter('resolution').value
         msg = Pose2D()
-        msg.x = size_x * resolution - 4
-        msg.y = size_y * resolution - 4
-        msg.theta = np.pi / 4
+        msg.x = self.goal_pose[0]
+        msg.y = self.goal_pose[1]
+        msg.theta = self.goal_pose[2]
         self.goal_pub.publish(msg)
 
 
