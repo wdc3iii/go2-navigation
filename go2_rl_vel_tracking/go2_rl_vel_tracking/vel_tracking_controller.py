@@ -54,6 +54,12 @@ class VelocityTrackingController(ObeliskController):
         # Phase info
         self.declare_parameter("phase_period", 0.3)
         self.phase_period = self.get_parameter("phase_period").get_parameter_value().double_value
+        self.declare_parameter("stand_threshold", 0.01)
+        self.stand_threshold = self.get_parameter("stand_threshold").get_parameter_value().double_value
+        self.declare_parameter("no_phase_during_stand", True)
+        self.no_phase_during_stand = self.get_parameter("no_phase_during_stand").get_parameter_value().bool_value
+        self.standing = True
+        self.last_time_to_stand = 0
 
         # Get default angles
         self.joint_names_isaac = [
@@ -125,7 +131,21 @@ class VelocityTrackingController(ObeliskController):
         else:
             self.get_logger().error(f"Estimated State base velocity size does not match URDF! Size is {len(x_hat_msg.v_base)} instead of 6.")
 
-        theta = 2 * np.pi / self.phase_period * (x_hat_msg.header.stamp.sec + x_hat_msg.header.stamp.nanosec * 1e-9)
+        
+        t = x_hat_msg.header.stamp.sec + x_hat_msg.header.stamp.nanosec * 1e-9
+        
+        if self.no_phase_during_stand and np.linalg.norm(self.cmd_vel) <= self.stand_threshold:
+            # If transitioning to stand, stop phase variable at next integer period
+            if not self.standing:
+                self.standing = True
+                self.last_time_to_stand = np.ceil(t / self.phase_period) * self.phase_period
+            theta = 2 * np.pi / self.phase_period * min(t - self.last_time_to_stand, 0)
+        else:
+            # If transitioning from stand, start phase variable at an integer period
+            if np.linalg.norm(self.cmd_vel) > self.stand_threshold and self.standing:
+                self.standing = False
+                self.last_time_to_stand = t
+            theta = 2 * np.pi / self.phase_period * (t - self.last_time_to_stand)
         self.phase = np.array([np.cos(theta), np.sin(theta)])
 
     def vel_cmd_callback(self, cmd_msg: VelocityCommand):

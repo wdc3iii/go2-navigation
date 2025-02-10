@@ -73,5 +73,5 @@ yarn-error.log
 coverage/
 
 # Matlab
-.mat
-.csv
+*.mat
+*.csv
