@@ -71,3 +71,7 @@ npm-debug.log*
 .yarn-integrity
 yarn-error.log
 coverage/
+
+# Matlab
+.mat
+.csv
