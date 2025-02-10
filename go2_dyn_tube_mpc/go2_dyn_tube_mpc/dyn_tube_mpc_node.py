@@ -230,9 +230,6 @@ class DynamicTubeMPCNode(ObeliskController):
 
         # Transform points to odom frame
         scan_points = np.dot(H, points_laser)[:2].T  # Extract x, y
-        self.get_logger().info(f"!!!!!!!!!!!!!!!!!! scan_points.shape{scan_points.shape}")
-        # import time
-        # time.sleep(0.1)
         self.dtmpc.update_scan(scan_points)
     
     def transform_to_matrix(self, transform):

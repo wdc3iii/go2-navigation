@@ -149,13 +149,7 @@ class FakeSLAMNode(Node):
 
     def publish_scan(self):
         """Publish a fake LIDAR scan."""
-        if not self.trajectory:
-            return
-
         # Get robot pose
-        pose_x, pose_y, theta = self.trajectory[self.current_index]
-        self.current_index = (self.current_index + 1) % len(self.trajectory)
-
         scan_msg = LaserScan()
         scan_msg.header.frame_id = "base_link"
         scan_msg.header.stamp = self.get_clock().now().to_msg()

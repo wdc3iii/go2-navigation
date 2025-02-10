@@ -74,4 +74,5 @@ coverage/
 
 # Matlab
 *.mat
+*.asv
 *.csv
