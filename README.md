@@ -45,9 +45,7 @@ Set logging dir:
 export ROS_HOME=~/sample-contact-walking
 ```
 ## Launch the Go2-Nav stack:
-```
-obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_rl_vel_tracking/share/go2_rl_vel_tracking/config/rl_vel_tracking.yml device_name=onboard
-```
+```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_rl_vel_tracking/share/go2_rl_vel_tracking/config/rl_vel_tracking.yml device_name=onboard```
 
 ```obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/high_level_test.yml device_name=onboard```
 

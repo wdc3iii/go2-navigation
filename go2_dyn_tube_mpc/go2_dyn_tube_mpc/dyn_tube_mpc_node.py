@@ -309,7 +309,7 @@ class DynamicTubeMPCNode(ObeliskController):
         constraint_msg.scale.y = 0.02
         constraint_msg.scale.z = 0.02
         clr = ColorRGBA()
-        clr.a = 1.
+        clr.a = 0.5
         clr.r = 0.
         clr.b = 1.
         clr.g = 0.

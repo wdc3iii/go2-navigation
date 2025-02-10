@@ -7,6 +7,11 @@ import threading
 
 class Exploration:
 
+    PLAN_TO_GOAL_FOUND = 1
+    PLAN_TO_FRONTIER_FOUND = 0
+    PATH_START_NOT_FREE = -1
+    NO_PLAN_FOUND = -2
+
     def __init__(
             self, map_lock, inflated_map_lock, min_frontier_size=6, robot_radius=3,
             front_size_weight=1, front_to_goal_weight=2, start_to_front_weight=1,
@@ -152,7 +157,7 @@ class Exploration:
         # plt.show()
 
         if self.search_map[start_node] != self.search_map.FREE:
-            return None, None, None
+            return None, None, None, self.PATH_START_NOT_FREE
         frontier_closed_list = []       # Mark cells which have been explored in frontier exploration
         frontiers = []                  # Store all frontiers
 
@@ -232,8 +237,8 @@ class Exploration:
         if nodes_expanded >= self.astar_depth_limit:
             print("Warning: A* search depth limit exceeded")
         if path_to_goal is None:
-            path_to_front, cost_to_front = self.select_intermediate_goal(frontiers, start_node, goal_node)
-            return path_to_front, cost_to_front, frontiers
+            path_to_front, cost_to_front, _, _ = self.select_intermediate_goal(frontiers, start_node, goal_node)
+            return path_to_front, cost_to_front, frontiers, self.PLAN_TO_FRONTIER_FOUND
 
         # TODO: Debugging
         # print(f"\tEnd Node: {path_to_goal[-1]}: {self.search_map[path_to_goal[-1]]}")
@@ -263,9 +268,7 @@ class Exploration:
         # self.search_map[goal_node]
 
         path_to_goal = self.map.map_to_pose(path_to_goal)
-        if find_frontiers:
-            return path_to_goal, cost_to_goal, frontiers
-        return path_to_goal, cost_to_goal
+        return path_to_goal, cost_to_goal, frontiers, self.PLAN_TO_GOAL_FOUND
 
     def select_intermediate_goal(self, frontiers, start_node, goal_node):
         min_front_score = np.inf

@@ -60,7 +60,7 @@ class HighLevelPlannerNode(ObeliskController):
         self.v_max_mapping = self.get_parameter("v_max_mapping").get_parameter_value().double_value
 
         # Nearest_points_size
-        self.declare_parameter("nearest_points_size", 60)
+        self.declare_parameter("nearest_points_size", 100)
         self.nearest_points_size = self.get_parameter("nearest_points_size").get_parameter_value().integer_value
 
         self.goal_pose = np.zeros((3,))
@@ -293,8 +293,48 @@ class HighLevelPlannerNode(ObeliskController):
             return traj_msg
         
         t0 = time.perf_counter_ns()
-        path, cost, frontiers = self.explorer.find_frontiers_to_goal(np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y, 0]), self.goal_pose, self.downsample)
-        self.get_logger().info(f"Astar solve took {(time.perf_counter_ns() - t0) * 1e-9}")
+        path, cost, frontiers, info = self.explorer.find_frontiers_to_goal(np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y, 0]), self.goal_pose, self.downsample)
+        self.get_logger().info(f"Astar solve took {(time.perf_counter_ns() - t0) * 1e-9}\tResult: {info}")
+
+        if info == self.explorer.PATH_START_NOT_FREE:
+            self.get_logger().warn("High Level Plan began in occupied space!")
+            return traj_msg
+        elif info == self.explorer.NO_PLAN_FOUND:
+            self.get_logger().warn("High Level Plan not found - no frontiers or goal!")
+            return traj_msg
+        
+        # TODO: decide whether to follow path in Dynamic or Mapping mode
+        vel_lim = VelocityCommand()
+        vel_lim.v_x = 1.
+        vel_lim.v_y = 1.
+        vel_lim.w_z = 1.
+        self.obk_publishers["pub_vel_lim_key"].publish(vel_lim)
+
+        try:
+            # Get transform from odom to robot frame
+            map_to_odom = self.tf_buffer.lookup_transform("map", "odom", rclpy.time.Time(), Duration(seconds=1.0))
+
+            # Extract robot pose in odom
+            self.map_to_odom_p = np.array([
+                map_to_odom.transform.translation.x, map_to_odom.transform.translation.y
+            ])
+            self.map_to_odom_yaw = self.quat2yaw([map_to_odom.transform.rotation.x, map_to_odom.transform.rotation.y, map_to_odom.transform.rotation.z, map_to_odom.transform.rotation.w])
+        except tf2_ros.LookupException as e:
+            self.get_logger().warm(f"Transform error: {e}")
+            return
+        path = (np.array([
+            [np.cos(self.map_to_odom_yaw), np.sin(self.map_to_odom_yaw)],
+            [-np.sin(self.map_to_odom_yaw), np.cos(self.map_to_odom_yaw)],
+        ]) @ (path - self.map_to_odom_p).T).T
+        
+        # setting the message (geometric only path)
+        traj_msg.horizon = path.shape[0] - 1
+        traj_msg.n = path.shape[1]
+        traj_msg.m = 0
+        traj_msg.z = np.array(path).flatten().tolist()
+
+        self.obk_publishers["pub_ctrl"].publish(traj_msg)
+        
         # Visualize frontiers
         yel = [0.9290, 0.6940, 0.1250]
         pur = [0.4940, 0.1840, 0.5560]
@@ -331,42 +371,6 @@ class HighLevelPlannerNode(ObeliskController):
             self.obk_publishers["pub_front_key"].publish(self.front_msg)
         else:
             self.get_logger().info("No frontiers located.")
-
-        if path is None:
-            self.get_logger().warn("High Level Plan began in occupied space!")
-            return traj_msg
-        # TODO: decide whether to follow path in Dynamic or Mapping mode
-        vel_lim = VelocityCommand()
-        vel_lim.v_x = 1.
-        vel_lim.v_y = 1.
-        vel_lim.w_z = 1.
-        self.obk_publishers["pub_vel_lim_key"].publish(vel_lim)
-
-        try:
-            # Get transform from odom to robot frame
-            map_to_odom = self.tf_buffer.lookup_transform("map", "odom", rclpy.time.Time(), Duration(seconds=10.0))
-
-            # Extract robot pose in odom
-            self.map_to_odom_p = np.array([
-                map_to_odom.transform.translation.x, map_to_odom.transform.translation.y
-            ])
-            self.map_to_odom_yaw = self.quat2yaw([map_to_odom.transform.rotation.x, map_to_odom.transform.rotation.y, map_to_odom.transform.rotation.z, map_to_odom.transform.rotation.w])
-        except tf2_ros.LookupException as e:
-            self.get_logger().warm(f"Transform error: {e}")
-            return
-        path = (np.array([
-            [np.cos(self.map_to_odom_yaw), np.sin(self.map_to_odom_yaw)],
-            [-np.sin(self.map_to_odom_yaw), np.cos(self.map_to_odom_yaw)],
-        ]) @ (path - self.map_to_odom_p).T).T
-        
-        # setting the message (geometric only path)
-        traj_msg.horizon = path.shape[0] - 1
-        traj_msg.n = path.shape[1]
-        traj_msg.m = 0
-        traj_msg.z = np.array(path).flatten().tolist()
-
-        self.obk_publishers["pub_ctrl"].publish(traj_msg)
-        
 
         # Publish message for viz
         viz_msg = Marker()

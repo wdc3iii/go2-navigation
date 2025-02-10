@@ -12,6 +12,7 @@ from obelisk_py.core.control import ObeliskController
 from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 
 import torch
+import csv
 
 
 class VelocityTrackingController(ObeliskController):
@@ -27,6 +28,10 @@ class VelocityTrackingController(ObeliskController):
         self.v_x_max = self.get_parameter("v_x_max").get_parameter_value().double_value
         self.v_y_max = self.get_parameter("v_y_max").get_parameter_value().double_value
         self.w_z_max = self.get_parameter("w_z_max").get_parameter_value().double_value
+
+        self.file = open('rl_vel_tracking_data.csv', 'w', newline='')
+        self.writer = csv.writer(self.file)
+        self.writer.writerow(["vx", "vy", "wz"] + (["act"] * 12) + (["q"] * 12) + (["dq"] * 12))
 
         # Load policy
         self.declare_parameter("policy_path", "")
@@ -162,6 +167,8 @@ class VelocityTrackingController(ObeliskController):
 
         # Call RL model
         self.action = self.policy(torch.tensor(obs).to(self.device).float()).detach().cpu().numpy()
+        self.writer.writerow(obs.tolist())
+        self.file.flush()
 
         # setting the message
         pd_ff_msg = PDFeedForward()
@@ -181,6 +188,10 @@ class VelocityTrackingController(ObeliskController):
         self.obk_publishers["pub_ctrl"].publish(pd_ff_msg)
         assert is_in_bound(type(pd_ff_msg), ObeliskControlMsg)
         return pd_ff_msg
+    
+    def on_shutdown(self, state: LifecycleState) -> TransitionCallbackReturn:
+        self.file.close()
+        return TransitionCallbackReturn.SUCCESS
     
 
 def main(args: Optional[List] = None) -> None:
