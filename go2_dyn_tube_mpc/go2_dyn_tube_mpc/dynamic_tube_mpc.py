@@ -10,8 +10,8 @@ from scipy.interpolate import interp1d
 class DynamicTubeMPC:
     
     def __init__(self, dt, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max,
-                 robot_radius=0, map_resolution=0.05, obs_rho=10, scan_rel_dist_cap=0.5, normal_alpha=0.5,
-                 obs_constraint_method="QuadraticPenalty", fix_internal_constraints=False):
+                 robot_radius=0, map_resolution=0.05, obs_rho=100, scan_rel_dist_cap=0.5, normal_alpha=0.5,
+                 obs_constraint_method="Constraint", fix_internal_constraints=False):
         # Dimensions
         self.N = N
         self.n = n
@@ -88,6 +88,7 @@ class DynamicTubeMPC:
                          ubx=self.ubx()
         )
         z, v = self.extract_solution(sol)
+        stats = self.nlp_solver.stats()
         
 
         # # TODO: Debugging
@@ -114,10 +115,16 @@ class DynamicTubeMPC:
         #     import csv
         #     writer = csv.writer(f)
         #     writer.writerows(data)
-        
+        savemat("sol.mat", {
+            "z": z,
+            "v": v,
+            "zwarm": self.z_warm
+        })
         self.z_warm = z.copy()
         self.v_warm = v.copy()
-        return z, v
+
+        
+        return z, v, stats["success"]
 
     def set_input_bounds(self, v_min, v_max):
         assert v_min.shape == self.v_min.shape and v_max.shape == self.v_max.shape
@@ -195,10 +202,11 @@ class DynamicTubeMPC:
         A = normals / np.linalg.norm(normals, axis=1, keepdims=True)
         b = -np.sum(A * nearest_points, axis=1) + constraint_buffer
 
-        if self.fix_internal_constraints:
-            A[nearest_map_dists < 0] *= -1
-            b[nearest_map_dists < 0] += (np.sqrt(2) + 1) * self.map_resolution / 2
+        # if self.fix_internal_constraints:
+        #     # A[nearest_map_dists < 0] *= -1
+        #     b[nearest_map_dists < 0] += (np.sqrt(2) + 1) * self.map_resolution / 2
 
+        # Debugging
         savemat("constraints.mat", {
             "A": A, "b": b,
             "nearest_map_points": nearest_map_points,
@@ -208,7 +216,6 @@ class DynamicTubeMPC:
             "nearest_points": nearest_points,
             "zwarm": self.z_warm
         })
-        # raise RuntimeError()
         return A, b, nearest_points
 
     @staticmethod
@@ -330,13 +337,14 @@ class DynamicTubeMPC:
         proj_normals /= np.linalg.norm(proj_normals, axis=-1, keepdims=True)
         proj_normals[dists < 0] *= -1
 
-        savemat("constraints_construction.mat", {
-            "A_proj": proj_normals, "b_proj": -np.sum(proj_normals * nearest_points, axis=1),
-            "A_grad": grad_normals, "b_grad": -np.sum(grad_normals * nearest_points, axis=1),
-            "nearest_points": nearest_points,
-            "nearest_dists": dists,
-            "zwarm": self.z_warm
-        })
+        # Debugging
+        # savemat("constraints_construction.mat", {
+        #     "A_proj": proj_normals, "b_proj": -np.sum(proj_normals * nearest_points, axis=1),
+        #     "A_grad": grad_normals, "b_grad": -np.sum(grad_normals * nearest_points, axis=1),
+        #     "nearest_points": nearest_points,
+        #     "nearest_dists": dists,
+        #     "zwarm": self.z_warm
+        # })
         # Intelligently mix normal representations
         normals = self.normal_alpha * proj_normals + (1 - self.normal_alpha) * grad_normals
         normals /= np.linalg.norm(normals, axis=-1, keepdims=True)
@@ -378,6 +386,13 @@ class DynamicTubeMPC:
         for i in range(nearest_points.shape[0]):
             nearest_ind = nearest_inds[i]
             normals[i, :] = self.compute_scan_obstacle_normal(nearest_ind)
+
+        savemat("scan_constraints_construction.mat", {
+            "A": normals, "b": -np.sum(normals * nearest_points, axis=1),
+            "nearest_points": nearest_points,
+            "nearest_dists": dists,
+            "zwarm": self.z_warm
+        })
         return normals, dists, nearest_points
     
     def compute_scan_obstacle_normal(self, point):
@@ -388,20 +403,19 @@ class DynamicTubeMPC:
         if rel_dist[0] > self.scan_rel_dist_cap and rel_dist[1] > self.scan_rel_dist_cap:
             normal = np.zeros((2,))  # Suprious point
         else:
-            if rel_dist[0] > self.scan_rel_dist_cap:
-                x = neighbors[1:, 0]
-                y = neighbors[1:, 1]
-            elif rel_dist[1] > self.scan_rel_dist_cap:
-                x = neighbors[:-1, 0]
-                y = neighbors[:-1, 1]
-            else:
-                x = neighbors[:, 0]
-                y = neighbors[:, 1]
+            # if rel_dist[0] > self.scan_rel_dist_cap:
+            #     x = neighbors[1:, 0]
+            #     y = neighbors[1:, 1]
+            # elif rel_dist[1] > self.scan_rel_dist_cap:
+            #     x = neighbors[:-1, 0]
+            #     y = neighbors[:-1, 1]
+            # else:
+            x = neighbors[:, 0]
+            y = neighbors[:, 1]
             A = np.vstack([x, np.ones(len(x))]).T  # Linear regression matrix
             slope, _ = np.linalg.lstsq(A, y, rcond=None)[0]
             norm_length = np.sqrt(1 + slope**2) + 1e-6
             normal = np.array([-slope, 1]) / norm_length  # Perpendicular to the tangent
-        
         # Ensure the normal points inward
         to_center = self.z0[:2] - self.scan[point]
         if np.dot(normal, to_center) < 0:

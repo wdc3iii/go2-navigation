@@ -89,3 +89,12 @@ end
 d = 3;
 % xlim([zwarm(1, 1) - d, zwarm(1, 1) + d])
 % ylim([zwarm(1, 2) - d, zwarm(1, 2) + d])
+
+%% Soluiton
+load('sol.mat')
+
+figure(3)
+clf
+hold on
+plot(zwarm(:, 1), zwarm(:, 2), '--')
+plot(z(:, 1), z(:, 2), '-')

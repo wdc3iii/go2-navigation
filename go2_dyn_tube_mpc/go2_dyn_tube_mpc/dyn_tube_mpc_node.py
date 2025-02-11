@@ -20,6 +20,7 @@ from obelisk_py.core.obelisk_typing import ObeliskControlMsg, is_in_bound
 from go2_dyn_tube_mpc.map_utils import map_to_pose
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
 
+import time
 import torch
 import numpy as np
 from scipy.io import savemat
@@ -193,8 +194,8 @@ class DynamicTubeMPCNode(ObeliskController):
         dim1 = nearest_points_msg.data[1].layout.dim
         dim2 = nearest_points_msg.data[2].layout.dim
         nearest_inds = np.concatenate((
-            np.array(nearest_points_msg.data[1].data).reshape(1, dim1[0].size, dim1[1].size),
-            np.array(nearest_points_msg.data[2].data).reshape(1, dim2[0].size, dim2[1].size)
+            np.array(nearest_points_msg.data[1].data).reshape(1, dim1[0].size, dim1[1].size).astype(int),
+            np.array(nearest_points_msg.data[2].data).reshape(1, dim2[0].size, dim2[1].size).astype(int)
         ), axis=0)
 
         map_origin = np.array([nearest_points_msg.info.pose.position.x, nearest_points_msg.info.pose.position.y])
@@ -293,7 +294,9 @@ class DynamicTubeMPCNode(ObeliskController):
 
         yaw = self.quat2yaw([odom_to_base.transform.rotation.x, odom_to_base.transform.rotation.y, odom_to_base.transform.rotation.z, odom_to_base.transform.rotation.w])
         self.dtmpc.set_initial_condition(np.array([odom_to_base.transform.translation.x, odom_to_base.transform.translation.y, yaw]))
-        z, v = self.dtmpc.solve()
+        t0 = time.perf_counter_ns()
+        z, v, info = self.dtmpc.solve()
+        self.get_logger().info(f"DTMPC solve took {(time.perf_counter_ns() - t0) * 1e-9}: Status {info}")
 
         # Construct the message
         traj_msg.horizon = self.dtmpc.N
