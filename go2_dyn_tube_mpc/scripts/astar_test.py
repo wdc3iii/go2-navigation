@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import random
-from go2_dyn_tube_mpc.go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
+from go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
 from scipy.ndimage import zoom
 import time
 import threading
@@ -9,7 +9,7 @@ FREE = 0
 UNCERTAIN = 1
 OCCUPIED = 2
 
-display = False
+display = True
 
 def generate_maze(width, height):
     """Generate a maze using recursive backtracking algorithm."""
@@ -99,7 +99,7 @@ if __name__ == '__main__':
         t1 = time.perf_counter()
         front.update_map(occ_grid_gt[c_l:c_u, r_l:r_u], (r_l, c_l))
         # Plan
-        path, cost, frontiers = front.find_frontiers_to_goal(curr_pose, goal_pose)
+        path, cost, frontiers, info = front.find_frontiers_to_goal(curr_pose, goal_pose)
         print(cost, time.perf_counter() - t1)
 
         # Display the maze

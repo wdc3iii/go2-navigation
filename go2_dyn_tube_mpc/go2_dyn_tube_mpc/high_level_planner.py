@@ -101,8 +101,8 @@ class HighLevelPlanner:
 
         self.inflated_map[x1:x2, y1:y2] = np.where(inflated_mask_occupied, self.map.OCCUPIED, inflated_uncertain_local)
 
-    def compute_nearest_inds(self, center, size, free=True):
-        return self.map.get_nearest_inds(center, size, free=free)
+    def compute_nearest_inds(self, center, size):
+        return self.map.get_nearest_inds(center, size)
 
     @staticmethod
     def heuristic(a, b):

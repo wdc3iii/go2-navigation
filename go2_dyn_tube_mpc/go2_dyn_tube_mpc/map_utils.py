@@ -102,18 +102,27 @@ class MapUtils:
         with self.lock:
             return map_to_pose(map_inds, self.map_origin, self.map_theta, self.resolution)
 
-    def get_nearest_inds(self, center, size, free=True):
+    def get_nearest_inds(self, center, size):
         center_inds = self.pose_to_map(center)
         x1 = max(center_inds[0] - size, 0)
         x2 = min(center_inds[0] + size, self.shape[0])
-        y1 = max(center_inds[1] - size // 2, 0)
-        y2 = min(center_inds[1] + size // 2, self.shape[1])
+        y1 = max(center_inds[1] - size, 0)
+        y2 = min(center_inds[1] + size, self.shape[1])
 
-        input_im = self[x1:x2, y1:y2] == self.FREE
-        if not free:
-            input_im = np.logical_not(input_im)
-        nearest_dists, nearest_inds = distance_transform_edt(input_im, return_indices=True)
-        nearest_dists *= self.resolution
+        # Get the area of interest
+        input_im_free = self[x1:x2, y1:y2] == self.FREE
+        input_im_occ = np.logical_not(input_im_free)
+            
+        # Compute the distance for the free space, and nearest indexes.
+        nearest_dists_free, nearest_inds_free = distance_transform_edt(input_im_free, return_indices=True)
+        nearest_dists_free *= self.resolution
+
+        # Compute the distance for the free space, and nearest indexes.
+        nearest_dists_occ, nearest_inds_occ = distance_transform_edt(input_im_occ, return_indices=True)
+        nearest_dists_occ *= self.resolution
+
+        nearest_dists = np.where(input_im_free, nearest_dists_free, -nearest_dists_occ)
+        nearest_inds = np.where(input_im_free, nearest_inds_free, nearest_inds_occ)
 
         dx = x1 * self.resolution
         dy = y1 * self.resolution

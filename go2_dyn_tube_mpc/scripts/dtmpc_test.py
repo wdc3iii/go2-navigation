@@ -1,8 +1,9 @@
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
 import numpy as np
 import matplotlib.pyplot as plt
-from go2_dyn_tube_mpc.go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
+from go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
 import time
+import threading
 
 visualize = True
 
@@ -37,6 +38,8 @@ if __name__ == "__main__":
 
     scan = np.array([
         [-0.2, -0.2],
+        [-0.2, -0.3],
+        [-0.2, -0.4],
         # [0.2, 0.11],
         # [0.2, 0.12],
         # [0.2, 0.13],
@@ -63,16 +66,15 @@ if __name__ == "__main__":
     z_f = np.array([1.8, 1.8, 0.])
 
     # Create graph solve
-    explorer = HighLevelPlanner(3, robot_radius=round(robot_radius / res), free=0, uncertain=1, occupied=2)
+    explorer = HighLevelPlanner(threading.Lock(), threading.Lock(),3, robot_radius=round(robot_radius / res), free=0, uncertain=1, occupied=2)
     explorer.set_map(occ_grid, (0, 0, 0), res)
 
     start = explorer.map.pose_to_map(z_i[:2])
     goal = explorer.map.pose_to_map(z_f[:2])
-    path, dist, frontiers = explorer.find_frontiers_to_goal(start, goal)
-    path_t = explorer.map.map_to_pose(np.array(path))
-    dtmpc.set_path(path_t)
+    path, dist, frontiers, info = explorer.find_frontiers_to_goal(start, goal)
+    dtmpc.set_path(path)
 
-    nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = explorer.compute_nearest_inds(z_i[:2], 30)
+    nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = explorer.compute_nearest_inds(z_i[:2], 100)
     dtmpc.update_nearest_inds(nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw)
 
     dtmpc.reset_warm_start()
@@ -88,7 +90,7 @@ if __name__ == "__main__":
         if visualize:
             fig, ax = plt.subplots()
             explorer.map.plot(ax=ax)
-            plt.plot(path_t[:, 0], path_t[:, 1], 'r')
+            plt.plot(path[:, 0], path[:, 1], 'r')
             plt.plot(z_sol[:, 0], z_sol[:, 1], '.-b')
             plt.show()
             time.sleep(0.1)
@@ -101,7 +103,7 @@ if __name__ == "__main__":
 
     _, ax = plt.subplots(1, 2)
     ax[0].plot(np.arange(z_all.shape[0]) * dtmpc.dt, z_all)
-    ax[0].plot(np.arange(path_t.shape[0]) * dtmpc.dt, path_t, '--')
+    ax[0].plot(np.arange(path.shape[0]) * dtmpc.dt, path, '--')
     ax[0].legend(['x', 'y', 'yaw', 'xd', 'yd'])
 
     ax[1].plot(np.arange(v_all.shape[0]) * dtmpc.dt, v_all)
@@ -110,6 +112,6 @@ if __name__ == "__main__":
 
     fig, ax = plt.subplots()
     explorer.map.plot(ax=ax)
-    plt.plot(path_t[:, 0], path_t[:, 1], 'r')
+    plt.plot(path[:, 0], path[:, 1], 'r')
     plt.plot(z_all[:, 0], z_all[:, 1], '.-b')
     plt.show()
