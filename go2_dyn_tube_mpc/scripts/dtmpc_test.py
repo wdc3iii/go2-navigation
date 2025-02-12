@@ -1,20 +1,27 @@
 from go2_dyn_tube_mpc.dynamic_tube_mpc import DynamicTubeMPC
+
+import time
+import torch
+import threading
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
+from matplotlib.collections import PatchCollection
 from go2_dyn_tube_mpc.high_level_planner import HighLevelPlanner
-import time
-import threading
 
 visualize = True
 
 if __name__ == "__main__":
     # Create DTMPC
     N = 20
+    H = 25
     n = 3
     m = 3
     dt = 0.1
     res = 0.05
     robot_radius = 0.15
+    model_path = "coleonguard-Georgia Institute of Technology/Deep_Tube_Training/gqzp1ubf_model:best"
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     v_max = np.array([0.5, 0.5, 1.5])
     v_min = np.array([-0.1, -0.5, -1.5])
     Q = np.array([1., 1., 0.1])
@@ -24,7 +31,13 @@ if __name__ == "__main__":
     Rv_first = np.array([0., 0., 0.])
     Rv_second = np.array([0., 0., 0.])
 
-    dtmpc = DynamicTubeMPC(dt, N, n, m, Q, Qf, R, Rv_first, Rv_second, Q_sched, v_min, v_max, robot_radius=robot_radius, obs_constraint_method="Constraint")
+    dtmpc = DynamicTubeMPC(
+        dt, N, H, n, m,
+        Q, Qf, R, Rv_first, Rv_second, Q_sched,
+        v_min, v_max,
+        model_path, device,
+        robot_radius=robot_radius, obs_constraint_method="QuadraticPenalty", obs_rho=100
+    )
     dtmpc.set_input_bounds(v_min, v_max)
     # Create problem
     occ_grid = np.zeros((41, 41))
@@ -80,22 +93,28 @@ if __name__ == "__main__":
     dtmpc.reset_warm_start()
     z_all = []
     v_all = []
+    w_all = []
     for _ in range(125):
         nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = explorer.compute_nearest_inds(dtmpc.z0[:2], 30)
         dtmpc.update_nearest_inds(nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw)
-        z_sol, v_sol = dtmpc.solve()
+        z_sol, v_sol, w_sol, info = dtmpc.solve()
         z_all.append(z_sol[0])
         v_all.append(v_sol[0])
+        w_all.append(w_sol[0])
 
         if visualize:
             fig, ax = plt.subplots()
             explorer.map.plot(ax=ax)
             plt.plot(path[:, 0], path[:, 1], 'r')
+            circles = [Circle((xi, yi), radius) for xi, yi, radius in zip(z_sol[1:, 0], z_sol[1:, 1], w_sol)]
+            collection = PatchCollection(circles, alpha=0.5, edgecolor='black')
+            ax.add_collection(collection)
             plt.plot(z_sol[:, 0], z_sol[:, 1], '.-b')
             plt.show()
-            time.sleep(0.1)
+            # time.sleep(0.1)
 
         dtmpc.set_initial_condition(z_sol[1])
+        dtmpc.update_history(0, v_sol[0])
 
     # Plot everything
     z_all = np.array(z_all)

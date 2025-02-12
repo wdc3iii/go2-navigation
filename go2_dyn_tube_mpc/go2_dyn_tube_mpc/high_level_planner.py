@@ -2,8 +2,9 @@ from go2_dyn_tube_mpc.map_utils import MapUtils
 
 import heapq
 import random
-import numpy as np
 import threading
+import numpy as np
+from scipy.interpolate import interp1d
 from scipy.ndimage import binary_dilation
 
 
@@ -18,7 +19,7 @@ class HighLevelPlanner:
             self, map_lock, inflated_map_lock, min_frontier_size=6, robot_radius=3,
             front_size_weight=1, front_to_goal_weight=2, start_to_front_weight=1,
             astar_depth_limit=1000000, frontier_depth_limit=10000,
-            free=0, uncertain=-1, occupied=100, downsample=4
+            free=0, uncertain=-1, occupied=100, downsample=4, smoothing_step_size=2
     ):
         # Store cells
         self.map_lock = map_lock
@@ -48,6 +49,7 @@ class HighLevelPlanner:
         self.start_to_front_weight = start_to_front_weight
         self.front_to_goal_weight = front_to_goal_weight
         self.front_size_weight = front_size_weight
+        self.smoothing_step_size = smoothing_step_size
 
     def set_map(self, occ_grid, map_origin, resolution):
         # Set the nominal map
@@ -280,9 +282,71 @@ class HighLevelPlanner:
         #                 print(f'({r}, {c}) not in came from keys')
         # goal_node in came_from.keys()
         # self.search_map[goal_node]
-
+        path_to_goal = self.randomly_smooth_path(path_to_goal)
         path_to_goal = self.map.map_to_pose(path_to_goal)
+        # Interpolate to discretization
+        path_length = np.hstack((np.array([0]), np.cumsum(np.linalg.norm(path_to_goal[1:] - path_to_goal[:-1], axis=1))))
+        des_path_length = np.arange(0, path_length[-1] + self.map.resolution, self.map.resolution)
+        interp_x = interp1d(path_length, path_to_goal[:, 0],
+                            kind='linear', fill_value=(path_to_goal[0, 0], path_to_goal[-1, 0]),
+                            bounds_error=False, assume_sorted=True)(des_path_length)
+        interp_y = interp1d(path_length, path_to_goal[:, 1],
+                            kind='linear', fill_value=(path_to_goal[0, 1], path_to_goal[-1, 1]),
+                            bounds_error=False, assume_sorted=True)(des_path_length)
+        path_to_goal = np.stack((interp_x, interp_y), axis=1)
         return path_to_goal, cost_to_goal, frontiers, self.PLAN_TO_GOAL_FOUND
+
+    def randomly_smooth_path(self, path_to_goal):
+        p0 = path_to_goal[0]
+        smoothed_path = [p0]
+        i_prev = 0
+        for i in range(self.smoothing_step_size, len(path_to_goal)):
+            p1 = path_to_goal[i]
+            if self.check_line_segment_intersects(p0[0], p0[1], p1[1], p1[1]):
+                smoothed_path.extend(path_to_goal[i_prev:i+1])
+                p0 = p1
+            i_prev = i
+        smoothed_path.append(path_to_goal[-1])
+        return smoothed_path
+
+    @staticmethod
+    def bresenham_line(x0, y0, x1, y1):
+        """Bresenham's Line Algorithm to generate grid cells along a line segment."""
+        cells_x = []
+        cells_y = []
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+
+        while True:
+            cells_x.append(x0)
+            cells_y.append(y0)
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                x0 += sx
+            if e2 < dx:
+                err += dx
+                y0 += sy
+        return cells_x, cells_y
+
+    def check_line_segment_intersects(self, x0, y0, x1, y1):
+        """
+        Check if a line segment intersects any occupied cell in an occupancy grid.
+
+        Args:
+            grid (np.ndarray): Occupancy grid, where 1 indicates an occupied cell.
+            x0, y0, x1, y1 (int): Start and end coordinates of the line segment.
+
+        Returns:
+            bool: True if the line segment intersects an occupied cell, False otherwise.
+        """
+        cells_x, cells_y = self.bresenham_line(x0, y0, x1, y1)
+        return np.any(self.map[cells_x, cells_y] != self.map.FREE)
 
     def select_intermediate_goal(self, frontiers, start_node, goal_node):
         min_front_score = np.inf

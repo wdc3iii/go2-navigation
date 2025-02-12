@@ -76,3 +76,6 @@ coverage/
 *.mat
 *.asv
 *.csv
+
+# L4Casadi
+_l4c_generated/

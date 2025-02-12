@@ -1,5 +1,6 @@
 from go2_dyn_tube_mpc.map_utils import map_to_pose, pose_to_map
 from go2_dyn_tube_mpc.load_tube_model import load_tube_model
+
 import torch
 import numpy as np
 import casadi as ca
@@ -13,7 +14,8 @@ class DynamicTubeMPC:
     
     def __init__(self, dt, N, H, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max, model_path, device,
                  robot_radius=0, map_resolution=0.05, obs_rho=100, scan_rel_dist_cap=0.5, normal_alpha=0.5,
-                 w_max=2, obs_constraint_method="Constraint", fix_internal_constraints=False):
+                 w_max=2, obs_constraint_method="Constraint", fix_internal_constraints=False,
+                 solver_str="snopt", verbosity=0):
         # Dimensions
         self.N = N
         self.H = H
@@ -52,7 +54,6 @@ class DynamicTubeMPC:
         self.e = np.zeros((H,))
         self.v_prev = np.zeros((H, m))
 
-
         # Warm starts
         self.z_warm = np.zeros((N + 1, n))
         self.v_warm = np.zeros((N, m))
@@ -67,6 +68,8 @@ class DynamicTubeMPC:
         assert self.obs_constraint_method in ["Constraint", "QuadraticPenalty", "LinearPenalty"]
         self.model_path = model_path
         self.device = device
+        self.solver_str = solver_str
+        self.verbosity = verbosity
 
         # Map / scan
         self.map_nearest_inds = None
@@ -96,8 +99,7 @@ class DynamicTubeMPC:
         params = self.init_params()
         x_init = self.init_decision_var()
         sol = self.nlp_solver(
-            x0=x_init, p=params, lbg=self.g_lb, ubg=self.g_ub, lbx=self.lbx(),
-                         ubx=self.ubx()
+            x0=x_init, p=params, lbg=self.g_lb, ubg=self.g_ub, lbx=self.lbx(), ubx=self.ubx()
         )
         z, v, w = self.extract_solution(sol)
         stats = self.nlp_solver.stats()
@@ -135,7 +137,7 @@ class DynamicTubeMPC:
         self.v_warm = v.copy()
         self.w_warm = w.copy()
 
-        return z, v, stats["success"]
+        return z, v, w, stats["success"]
 
     def set_input_bounds(self, v_min, v_max):
         assert v_min.shape == self.v_min.shape and v_max.shape == self.v_max.shape
@@ -208,8 +210,8 @@ class DynamicTubeMPC:
             np.reshape(self.v_ref, (-1, 1), order='F'),
             np.reshape(A, (-1, 1), order='F'),
             b[:, None],
-            self.v_min, self.v_max,
-            self.e, self.v_prev
+            self.v_min[:, None], self.v_max[:, None],
+            self.e[:, None], np.reshape(self.v_prev, (-1, 1), order='F')
         ])
         return params
 
@@ -277,7 +279,7 @@ class DynamicTubeMPC:
         x_init = np.vstack([
             np.reshape(self.z_warm, ((self.N + 1) * self.n, 1), order='F'),
             np.reshape(self.v_warm, (self.N * self.m, 1), order='F'),
-            self.w_warm
+            self.w_warm[:, None]
         ])
         return x_init
 
@@ -286,7 +288,7 @@ class DynamicTubeMPC:
         v_ind = self.N * self.m
         z_sol = np.array(sol["x"][:z_ind, :].reshape((self.N + 1, self.n)))
         v_sol = np.array(sol["x"][z_ind:z_ind + v_ind, :].reshape((self.N, self.m)))
-        w_sol = np.array(sol["x"][z_ind + v_ind:, :].reshape((self.N,)))
+        w_sol = np.array(sol["x"][z_ind + v_ind:, :]).reshape((self.N,))
         return z_sol, v_sol, w_sol
 
     @staticmethod
@@ -340,13 +342,13 @@ class DynamicTubeMPC:
         return dist, ca.DM(*dist.shape), ca.DM(*dist.shape)
 
     def get_nearest_map_points(self):
-        warm_x, warm_y = pose_to_map(self.z_warm, self.map_origin, self.map_theta, self.map_resolution)
+        warm_x, warm_y = pose_to_map(self.z_warm[1:], self.map_origin, self.map_theta, self.map_resolution)
         warm_x = np.clip(warm_x, 0, self.map_nearest_dists.shape[0] - 1)
         warm_y = np.clip(warm_y, 0, self.map_nearest_dists.shape[1] - 1)
         nearest_dists = self.map_nearest_dists[warm_x, warm_y].T
         nearest_inds = self.map_nearest_inds[:, warm_x, warm_y].T
         nearest_points = map_to_pose(nearest_inds, self.map_origin, self.map_theta, self.map_resolution)
-        dists = np.linalg.norm(nearest_points - self.z_warm[:, :2], axis=1)
+        dists = np.linalg.norm(nearest_points - self.z_warm[1:, :2], axis=1)
         dists[nearest_dists < 0] *= -1
         return nearest_points, dists, nearest_inds
     
@@ -361,7 +363,7 @@ class DynamicTubeMPC:
             grad_normals[i, :] = self.compute_map_obstacle_normal(nearest_ind)
 
         # Compute normals from the points
-        proj_normals = self.z_warm[:, :2] - nearest_points
+        proj_normals = self.z_warm[1:, :2] - nearest_points
         proj_normals /= np.linalg.norm(proj_normals, axis=-1, keepdims=True)
         proj_normals[dists < 0] *= -1
 
@@ -405,7 +407,7 @@ class DynamicTubeMPC:
         # Computes a KDTree of the scan points, and queries for closest distances
         # O(NlogM) < O(NM) - beats brute force
         tree = KDTree(self.scan)
-        dists, inds = tree.query(self.z_warm[:, :2])  # Find nearest neighbor indices
+        dists, inds = tree.query(self.z_warm[1:, :2])  # Find nearest neighbor indices
         return self.scan[inds], dists, inds
     
     def get_nearest_scan_normals(self):
@@ -472,8 +474,8 @@ class DynamicTubeMPC:
         p_v_max = ca.MX.sym("p_v_max", 1, self.m)
 
         # Obstacle normals
-        p_A = ca.MX.sym("p_A", self.N + 1, self.n - 1)
-        p_b = ca.MX.sym("p_b", self.N + 1, 1)
+        p_A = ca.MX.sym("p_A", self.N, self.n - 1)
+        p_b = ca.MX.sym("p_b", self.N, 1)
 
         # Initial condition parameter
         p_z0 = ca.MX.sym("p_z0", 1, self.n)  # Initial projection Pz(x0) state
@@ -509,11 +511,11 @@ class DynamicTubeMPC:
         g_tube, g_lb_tube, g_ub_tube = recursive_nn_tube_dyn(z, v, w, e, v_prev)
 
         # Linearized Obstacle Constraint A p + b - w >= 0
-        obs_dist = ca.sum2(p_A * p) + p_b - w
+        obs_dist = ca.sum2(p_A * p[1:, :]) + p_b - w  # Constraint applys only after the current node (which can't be moved)
         if self.obs_constraint_method == "Constraint":    # Constraint method
             g_obs = obs_dist
-            g_lb_obs = ca.DM(self.N + 1, 1)
-            g_ub_obs = ca.DM(self.N + 1, 1)
+            g_lb_obs = ca.DM(self.N, 1)
+            g_ub_obs = ca.DM(self.N, 1)
             g_ub_obs[:] = ca.inf
 
             # Create constraints
@@ -545,9 +547,9 @@ class DynamicTubeMPC:
         self.p_nlp = ca.vertcat(
             p_z0.T,
             ca.reshape(p_z_ref, (self.N + 1) * self.n, 1), ca.reshape(p_v_ref, self.N * self.m, 1),
-            ca.reshape(p_A, (self.N + 1) * (self.n - 1), 1), p_b,
-            p_v_min, p_v_max,
-            e, v_prev
+            ca.reshape(p_A, self.N * (self.n - 1), 1), p_b,
+            p_v_min.T, p_v_max.T,
+            e, ca.reshape(v_prev, -1, 1)
         )
 
         # x_cols, g_cols, p_cols = generate_col_names(N, x_nlp, g, p_nlp)
@@ -557,17 +559,28 @@ class DynamicTubeMPC:
             "g": self.g,
             "p": self.p_nlp
         }
-        self.nlp_opts = {
-            "ipopt.linear_solver": "mumps",
-            "ipopt.sb": "yes",
-            "ipopt.max_iter": 200,
-            "ipopt.tol": 1e-4,
-            "print_time": False,
-            "ipopt.print_level": 0,  # Further suppress IPOPT messages
-            # "ipopt.sb": "yes",  # Suppresses IPOPT banner
-        }
 
-        self.nlp_solver = ca.nlpsol("DeepTubeMPC", "ipopt", nlp_dict, self.nlp_opts)
+        if self.solver_str == "ipopt":
+            self.nlp_opts = {
+                "ipopt.linear_solver": "mumps",
+                "ipopt.sb": "yes",
+                "ipopt.max_iter": 200,
+                "ipopt.tol": 1e-4,
+                "print_time": False,
+                "ipopt.print_level": self.verbosity,  # Further suppress IPOPT messages
+            }
+        elif self.solver_str == "snopt":
+            self.nlp_opts = {"snopt": {
+                "Major feasibility tolerance": 1e-6,
+                "Major optimality tolerance": 1e-3,
+                "Major iterations limit": 4,
+                "Minor iterations limit": 20,
+                "Time limit": 0.1
+            }}
+        else:
+            raise RuntimeError("Unknown solver_str")
+
+        self.nlp_solver = ca.nlpsol("DeepTubeMPC", self.solver_str, nlp_dict, self.nlp_opts)
 
     def get_recursive_nn_tube_dynamics(self):
         tube_recursive_model = load_tube_model(self.model_path)
@@ -596,7 +609,7 @@ class DynamicTubeMPC:
                     )
                 all_data.append(data)
 
-            g = ca.horzcat(*[fw(data.T) for data in all_data]) - w.T
+            g = ca.horzcat(*[fw(data) for data in all_data]) - w.T
             g_lb = ca.DM(*g.shape)
             g_ub = ca.DM(*g.shape)
 
