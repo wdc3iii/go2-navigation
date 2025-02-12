@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y \
     python3.10-venv \
     python3-pip \
     sudo && \
+    cuda-toolkit-12-4 && \
     rm -rf /var/lib/apt/lists/* && \
     locale-gen en_US.UTF-8
 
@@ -70,3 +71,8 @@ ENV OBELISK_BUILD_UNITREE=true
 RUN echo 'alias launch_go2_rl_vel="obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_rl_vel_tracking/share/go2_rl_vel_tracking/config/rl_vel_tracking.yml device_name=onboard auto_start=configure"' >> ~/.bashrc
 RUN echo 'alias launch_go2_dtmpc="obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/dynamic_tube_mpc.yml device_name=onboard auto_start=configure"' >> ~/.bashrc
 RUN echo 'alias launch_go2_high_level_test="obk-launch config_file_path=${GO2_NAVIGATION_ROOT}/install/go2_dyn_tube_mpc/share/go2_dyn_tube_mpc/config/high_level_test.yml device_name=onboard auto_start=configure"' >> ~/.bashrc
+
+WORKDIR /home/${USER}/repos
+RUN git clone https://github.com/Tim-Salzmann/l4casadi.git && cd l4casadi
+RUN pip install -r requirements_build.txt
+RUN pip install . --no-build-isolation

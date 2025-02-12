@@ -29,8 +29,8 @@ if __name__ == "__main__":
     # Create problem
     occ_grid = np.zeros((41, 41))
     # index map via [y x]
-    occ_grid[10:15, :30] = 2
-    occ_grid[25:30, 10:] = 1
+    occ_grid[12:14, :25] = 2
+    occ_grid[26:28, 15:] = 1
     occ_grid[0, :] = 1
     occ_grid[-1, :] = 1
     occ_grid[:, 0] = 1

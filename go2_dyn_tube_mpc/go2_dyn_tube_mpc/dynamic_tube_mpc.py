@@ -1,7 +1,9 @@
 from go2_dyn_tube_mpc.map_utils import map_to_pose, pose_to_map
-
+from go2_dyn_tube_mpc.load_tube_model import load_tube_model
+import torch
 import numpy as np
 import casadi as ca
+import l4casadi as l4c
 from scipy.io import savemat
 from scipy.spatial import KDTree
 from scipy.interpolate import interp1d
@@ -9,11 +11,12 @@ from scipy.interpolate import interp1d
 
 class DynamicTubeMPC:
     
-    def __init__(self, dt, N, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max,
+    def __init__(self, dt, N, H, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max, model_path, device,
                  robot_radius=0, map_resolution=0.05, obs_rho=100, scan_rel_dist_cap=0.5, normal_alpha=0.5,
-                 obs_constraint_method="Constraint", fix_internal_constraints=False):
+                 w_max=2, obs_constraint_method="Constraint", fix_internal_constraints=False):
         # Dimensions
         self.N = N
+        self.H = H
         self.n = n
         self.m = m
         self.dt = dt
@@ -33,6 +36,7 @@ class DynamicTubeMPC:
         self.v_max = np.zeros((m,))
         self.v_min_bound = v_min
         self.v_min = np.zeros((m,))
+        self.w_max = w_max
 
         # Reference Trajectory
         self.path = None
@@ -45,10 +49,14 @@ class DynamicTubeMPC:
 
         # Initial condition
         self.z0 = np.zeros((n,))
+        self.e = np.zeros((H,))
+        self.v_prev = np.zeros((H, m))
+
 
         # Warm starts
         self.z_warm = np.zeros((N + 1, n))
         self.v_warm = np.zeros((N, m))
+        self.w_warm = np.zeros((N, n))
 
         # Constraint parameters
         self.obs_rho = obs_rho
@@ -57,6 +65,8 @@ class DynamicTubeMPC:
         self.scan_rel_dist_cap = scan_rel_dist_cap
         self.normal_alpha = normal_alpha
         assert self.obs_constraint_method in ["Constraint", "QuadraticPenalty", "LinearPenalty"]
+        self.model_path = model_path
+        self.device = device
 
         # Map / scan
         self.map_nearest_inds = None
@@ -70,6 +80,8 @@ class DynamicTubeMPC:
         # Casadi variables
         self.z_lb = None
         self.z_ub = None
+        self.w_lb = None
+        self.w_ub = None
         self.g = None
         self.g_lb = None
         self.g_ub = None
@@ -87,9 +99,8 @@ class DynamicTubeMPC:
             x0=x_init, p=params, lbg=self.g_lb, ubg=self.g_ub, lbx=self.lbx(),
                          ubx=self.ubx()
         )
-        z, v = self.extract_solution(sol)
+        z, v, w = self.extract_solution(sol)
         stats = self.nlp_solver.stats()
-        
 
         # # TODO: Debugging
         # with open("debugging_dtmpc.csv", 'w') as f:
@@ -122,8 +133,8 @@ class DynamicTubeMPC:
         })
         self.z_warm = z.copy()
         self.v_warm = v.copy()
+        self.w_warm = w.copy()
 
-        
         return z, v, stats["success"]
 
     def set_input_bounds(self, v_min, v_max):
@@ -140,15 +151,26 @@ class DynamicTubeMPC:
         assert z0.shape == self.z0.shape
         self.z0 = z0
 
-    def set_warm_start(self, z_warm, v_warm):
+    def set_warm_start(self, z_warm, v_warm, w_warm=None):
         assert z_warm.shape == self.z_warm.shape and v_warm.shape == self.v_warm.shape
         self.z_warm = z_warm
         self.v_warm = v_warm
+        if w_warm is None:
+            self.w_warm = np.ones((self.N,)) * 0.2
+        else:
+            self.w_warm = w_warm
 
     def reset_warm_start(self):
         self.compute_reference()
         self.z_warm = self.z_ref.copy()
         self.v_warm = self.v_ref.copy()
+        self.w_warm = np.ones((self.N,)) * 0.2
+
+    def update_history(self, e0, v0):
+        self.e[1:] = self.e[:-1]
+        self.e[0] = e0
+        self.v_prev[1:] = self.v_prev[:-1]
+        self.v_prev[0] = v0
 
     def update_scan(self, scan_points):
         self.scan = scan_points
@@ -164,13 +186,15 @@ class DynamicTubeMPC:
         return ca.vertcat(
             ca.reshape(self.z_lb, (self.N + 1) * self.n, 1),
             ca.reshape(v_lb, self.N * self.m, 1),
+            ca.DM(self.N, 1)
         )
-    
+
     def ubx(self):
         v_ub = ca.DM(np.repeat(self.v_max[:, None], self.N, 0))
         return ca.vertcat(
             ca.reshape(self.z_ub, (self.N + 1) * self.n, 1),
             ca.reshape(v_ub, self.N * self.m, 1),
+            ca.DM(np.ones((self.N, 1)) * self.w_max)
         )
 
     def init_params(self):
@@ -183,7 +207,9 @@ class DynamicTubeMPC:
             np.reshape(self.z_ref, (-1, 1), order='F'),
             np.reshape(self.v_ref, (-1, 1), order='F'),
             np.reshape(A, (-1, 1), order='F'),
-            b[:, None]
+            b[:, None],
+            self.v_min, self.v_max,
+            self.e, self.v_prev
         ])
         return params
 
@@ -250,7 +276,8 @@ class DynamicTubeMPC:
     def init_decision_var(self):
         x_init = np.vstack([
             np.reshape(self.z_warm, ((self.N + 1) * self.n, 1), order='F'),
-            np.reshape(self.v_warm, (self.N * self.m, 1), order='F')
+            np.reshape(self.v_warm, (self.N * self.m, 1), order='F'),
+            self.w_warm
         ])
         return x_init
 
@@ -259,7 +286,8 @@ class DynamicTubeMPC:
         v_ind = self.N * self.m
         z_sol = np.array(sol["x"][:z_ind, :].reshape((self.N + 1, self.n)))
         v_sol = np.array(sol["x"][z_ind:z_ind + v_ind, :].reshape((self.N, self.m)))
-        return z_sol, v_sol
+        w_sol = np.array(sol["x"][z_ind + v_ind:, :].reshape((self.N,)))
+        return z_sol, v_sol, w_sol
 
     @staticmethod
     def quadratic_objective(x, Q, goal=None, t_sched=None):
@@ -421,7 +449,7 @@ class DynamicTubeMPC:
         if np.dot(normal, to_center) < 0:
             normal = -normal  # Flip the normal to point inward
         return normal
-    
+
     def setup_ocp(self):
         self.z_lb = ca.DM(self.N + 1, self.n)
         self.z_lb[:] = -ca.inf
@@ -433,10 +461,15 @@ class DynamicTubeMPC:
         theta = ca.MX.sym("theta", self.N + 1, 1)
         z = ca.horzcat(p, theta)
         v = ca.MX.sym("v", self.N, self.m)
+        w = ca.MX.sym("w", self.N, 1)
+        self.w_lb = ca.DM(self.N, 1)
+        self.w_ub = ca.DM(np.ones((self.N, 1)) * self.w_max)
 
         # Parameters for z_ref
         p_z_ref = ca.MX.sym("p_z_ref", self.N + 1, self.n)
         p_v_ref = ca.MX.sym("p_v_ref", self.N, self.m)
+        p_v_min = ca.MX.sym("p_v_min", 1, self.m)
+        p_v_max = ca.MX.sym("p_v_max", 1, self.m)
 
         # Obstacle normals
         p_A = ca.MX.sym("p_A", self.N + 1, self.n - 1)
@@ -470,8 +503,13 @@ class DynamicTubeMPC:
         g_ic, g_lb_ic, g_ub_ic = self.equality_constraint(z[0, :], p_z0)
 
         # TODO: define tube constraint
-        # Linearized Obstacle Constraint A p + b >= 0
-        obs_dist = ca.sum2(p_A * p) + p_b
+        recursive_nn_tube_dyn, H_fwd, H_rev, eval_nn_tube_dyn = self.get_recursive_nn_tube_dynamics()
+        e = ca.MX.sym("e", H_rev, 1)
+        v_prev = ca.MX.sym("v_prev", H_rev, self.m)
+        g_tube, g_lb_tube, g_ub_tube = recursive_nn_tube_dyn(z, v, w, e, v_prev)
+
+        # Linearized Obstacle Constraint A p + b - w >= 0
+        obs_dist = ca.sum2(p_A * p) + p_b - w
         if self.obs_constraint_method == "Constraint":    # Constraint method
             g_obs = obs_dist
             g_lb_obs = ca.DM(self.N + 1, 1)
@@ -479,13 +517,13 @@ class DynamicTubeMPC:
             g_ub_obs[:] = ca.inf
 
             # Create constraints
-            g = ca.horzcat(g_dyn, g_ic, g_obs.T)
-            g_lb = ca.horzcat(g_dyn_lb, g_lb_ic, g_lb_obs.T)
-            g_ub = ca.horzcat(g_dyn_ub, g_ub_ic, g_ub_obs.T)
+            g = ca.horzcat(g_dyn, g_ic, g_tube, g_obs.T)
+            g_lb = ca.horzcat(g_dyn_lb, g_lb_ic, g_lb_tube, g_lb_obs.T)
+            g_ub = ca.horzcat(g_dyn_ub, g_ub_ic, g_ub_tube, g_ub_obs.T)
         else:
-            g = ca.horzcat(g_dyn, g_ic)
-            g_lb = ca.horzcat(g_dyn_lb, g_lb_ic)
-            g_ub = ca.horzcat(g_dyn_ub, g_ub_ic)
+            g = ca.horzcat(g_dyn, g_ic, g_tube)
+            g_lb = ca.horzcat(g_dyn_lb, g_lb_ic, g_lb_tube)
+            g_ub = ca.horzcat(g_dyn_ub, g_ub_ic, g_ub_tube)
             if self.obs_constraint_method == "QuadraticPenalty":  # quadratic cost method
                 self.obj += self.obs_rho / 2 * ca.sumsqr(ca.fmin(obs_dist, 0))
             elif self.obs_constraint_method == "LinearPenalty":        # linear cost method
@@ -502,11 +540,14 @@ class DynamicTubeMPC:
         self.x_nlp = ca.vertcat(
             ca.reshape(z, (self.N + 1) * self.n, 1),
             ca.reshape(v, self.N * self.m, 1),
+            w
         )
         self.p_nlp = ca.vertcat(
             p_z0.T,
             ca.reshape(p_z_ref, (self.N + 1) * self.n, 1), ca.reshape(p_v_ref, self.N * self.m, 1),
-            ca.reshape(p_A, (self.N + 1) * (self.n - 1), 1), p_b
+            ca.reshape(p_A, (self.N + 1) * (self.n - 1), 1), p_b,
+            p_v_min, p_v_max,
+            e, v_prev
         )
 
         # x_cols, g_cols, p_cols = generate_col_names(N, x_nlp, g, p_nlp)
@@ -527,3 +568,169 @@ class DynamicTubeMPC:
         }
 
         self.nlp_solver = ca.nlpsol("DeepTubeMPC", "ipopt", nlp_dict, self.nlp_opts)
+
+    def get_recursive_nn_tube_dynamics(self):
+        tube_recursive_model = load_tube_model(self.model_path)
+
+        tube_recursive_model.mlp.to(self.device)
+        tube_recursive_model.mlp.eval()
+        fw = l4c.L4CasADi(tube_recursive_model.mlp, device=self.device)
+
+        def recursive_nn_tube_dyn(z, v, w, e, v_prev):
+            v = ca.vertcat(v_prev, v)
+            all_data = []
+            for i in range(w.shape[0]):
+                if i < tube_recursive_model.H_rev:
+                    data = ca.horzcat(
+                        e[i:, :].T, w[0:i, :].T,
+                        ca.reshape(v[i:i + tube_recursive_model.H_rev, :].T, 1,
+                                   tube_recursive_model.H_rev * v.shape[1]),
+                        ca.DM([i])
+                    )
+                else:
+                    data = ca.horzcat(
+                        w[i - tube_recursive_model.H_rev:i, :].T,
+                        ca.reshape(v[i:i + tube_recursive_model.H_rev, :].T, 1,
+                                   tube_recursive_model.H_rev * v.shape[1]),
+                        ca.DM([i])
+                    )
+                all_data.append(data)
+
+            g = ca.horzcat(*[fw(data.T) for data in all_data]) - w.T
+            g_lb = ca.DM(*g.shape)
+            g_ub = ca.DM(*g.shape)
+
+            return g, g_lb, g_ub
+
+        def eval_nn_tube_dyn(z, v, e, v_prev):
+            w = torch.zeros((v.shape[0], 1), device=self.device)
+            v = torch.from_numpy(v).float().to(self.device)
+            e = torch.from_numpy(e).float().to(self.device)
+            v_prev = torch.from_numpy(v_prev).float().to(self.device)
+            v = torch.concatenate((v_prev, v))
+            for i in range(w.shape[0]):
+                if i < tube_recursive_model.H_rev:
+                    data = torch.concatenate((
+                        e[i:, :].T, w[0:i, :].T,
+                        torch.reshape(v[i:i + tube_recursive_model.H_rev, :],
+                                      (1, tube_recursive_model.H_rev * v.shape[1])),
+                        torch.tensor([[i]], device=self.device).float()
+                    ), dim=1)
+                else:
+                    data = torch.concatenate((
+                        w[i - tube_recursive_model.H_rev:i, :].T,
+                        torch.reshape(v[i:i + tube_recursive_model.H_rev, :],
+                                      (1, tube_recursive_model.H_rev * v.shape[1])),
+                        torch.tensor([[i]], device=self.device)
+                    ), dim=1)
+                w[i] = tube_recursive_model.mlp(data)
+
+            return w
+
+        return recursive_nn_tube_dyn, tube_recursive_model.H_fwd, tube_recursive_model.H_rev, eval_nn_tube_dyn
+
+    # def setup_ocp(self):
+    #     self.z_lb = ca.DM(self.N + 1, self.n)
+    #     self.z_lb[:] = -ca.inf
+    #     self.z_ub = ca.DM(self.N + 1, self.n)
+    #     self.z_ub[:] = ca.inf
+    #
+    #     # State variables
+    #     p = ca.MX.sym("p", self.N + 1, self.n - 1)
+    #     theta = ca.MX.sym("theta", self.N + 1, 1)
+    #     z = ca.horzcat(p, theta)
+    #     v = ca.MX.sym("v", self.N, self.m)
+    #
+    #     # Parameters for z_ref
+    #     p_z_ref = ca.MX.sym("p_z_ref", self.N + 1, self.n)
+    #     p_v_ref = ca.MX.sym("p_v_ref", self.N, self.m)
+    #
+    #     # Obstacle normals
+    #     p_A = ca.MX.sym("p_A", self.N + 1, self.n - 1)
+    #     p_b = ca.MX.sym("p_b", self.N + 1, 1)
+    #
+    #     # Initial condition parameter
+    #     p_z0 = ca.MX.sym("p_z0", 1, self.n)  # Initial projection Pz(x0) state
+    #
+    #     # Define cost function
+    #     # Reference Tracking
+    #     self.obj = self.quadratic_objective(z[:-1, :2], self.Q, goal=p_z_ref[:-1, :2], t_sched=self.Q_sched) \
+    #           + self.geo_cost(z[:-1, 2], self.Q_heading, goal=p_z_ref[:-1, 2], t_sched=self.Q_sched) \
+    #           + self.quadratic_objective(v, self.R, goal=p_v_ref) \
+    #           + self.quadratic_objective(z[-1, :2], self.Qf, goal=p_z_ref[-1, :2]) \
+    #           + self.geo_cost(z[-1, 2], self.Qf_heading, goal=p_z_ref[-1, 2])
+    #
+    #     # Smoothness of input
+    #     # First order difference
+    #     if np.any(self.Rv_f > 0):
+    #         Rv_f_ = ca.DM(self.Rv_f)
+    #         self.obj += self.quadratic_objective(v[:-1, :] - v[1:, :], Rv_f_)
+    #     # Second order difference
+    #     if np.any(self.Rv_s > 0):
+    #         Rv_s_ = ca.DM(self.Rv_s)
+    #         first = v[:-1, :] - v[1:, :]
+    #         self.obj += self.quadratic_objective(first[:-1, :] - first[1:, :], Rv_s_)
+    #
+    #     # Define dynamics constraint
+    #     g_dyn, g_dyn_lb, g_dyn_ub = self.dynamics_constraints(z, v)
+    #     # Initial Condition Constraint
+    #     g_ic, g_lb_ic, g_ub_ic = self.equality_constraint(z[0, :], p_z0)
+    #
+    #     # TODO: define tube constraint
+    #     # Linearized Obstacle Constraint A p + b >= 0
+    #     obs_dist = ca.sum2(p_A * p) + p_b
+    #     if self.obs_constraint_method == "Constraint":    # Constraint method
+    #         g_obs = obs_dist
+    #         g_lb_obs = ca.DM(self.N + 1, 1)
+    #         g_ub_obs = ca.DM(self.N + 1, 1)
+    #         g_ub_obs[:] = ca.inf
+    #
+    #         # Create constraints
+    #         g = ca.horzcat(g_dyn, g_ic, g_obs.T)
+    #         g_lb = ca.horzcat(g_dyn_lb, g_lb_ic, g_lb_obs.T)
+    #         g_ub = ca.horzcat(g_dyn_ub, g_ub_ic, g_ub_obs.T)
+    #     else:
+    #         g = ca.horzcat(g_dyn, g_ic)
+    #         g_lb = ca.horzcat(g_dyn_lb, g_lb_ic)
+    #         g_ub = ca.horzcat(g_dyn_ub, g_ub_ic)
+    #         if self.obs_constraint_method == "QuadraticPenalty":  # quadratic cost method
+    #             self.obj += self.obs_rho / 2 * ca.sumsqr(ca.fmin(obs_dist, 0))
+    #         elif self.obs_constraint_method == "LinearPenalty":        # linear cost method
+    #             self.obj += self.obs_rho * ca.sum1(ca.fmin(obs_dist, 0))
+    #         else:
+    #             raise RuntimeError("Unknown obs_constraint_method")
+    #
+    #     # Constraint matrices
+    #     self.g = g.T
+    #     self.g_lb = g_lb.T
+    #     self.g_ub = g_ub.T
+    #
+    #     # Generate solver
+    #     self.x_nlp = ca.vertcat(
+    #         ca.reshape(z, (self.N + 1) * self.n, 1),
+    #         ca.reshape(v, self.N * self.m, 1),
+    #     )
+    #     self.p_nlp = ca.vertcat(
+    #         p_z0.T,
+    #         ca.reshape(p_z_ref, (self.N + 1) * self.n, 1), ca.reshape(p_v_ref, self.N * self.m, 1),
+    #         ca.reshape(p_A, (self.N + 1) * (self.n - 1), 1), p_b
+    #     )
+    #
+    #     # x_cols, g_cols, p_cols = generate_col_names(N, x_nlp, g, p_nlp)
+    #     nlp_dict = {
+    #         "x": self.x_nlp,
+    #         "f": self.obj,
+    #         "g": self.g,
+    #         "p": self.p_nlp
+    #     }
+    #     self.nlp_opts = {
+    #         "ipopt.linear_solver": "mumps",
+    #         "ipopt.sb": "yes",
+    #         "ipopt.max_iter": 200,
+    #         "ipopt.tol": 1e-4,
+    #         "print_time": False,
+    #         "ipopt.print_level": 0,  # Further suppress IPOPT messages
+    #         # "ipopt.sb": "yes",  # Suppresses IPOPT banner
+    #     }
+    #
+    #     self.nlp_solver = ca.nlpsol("DeepTubeMPC", "ipopt", nlp_dict, self.nlp_opts)
