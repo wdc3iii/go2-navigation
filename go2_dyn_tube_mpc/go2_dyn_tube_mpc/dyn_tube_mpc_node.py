@@ -5,7 +5,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 
 from std_msgs.msg import ColorRGBA
-from sensor_msgs.msg import LaserScan
+# from sensor_msgs.msg import LaserScan
 from grid_map_msgs.msg import GridMap
 from go2_dyn_tube_mpc_msgs.msg import Trajectory
 from obelisk_control_msgs.msg import VelocityCommand
@@ -123,13 +123,13 @@ class DynamicTubeMPCNode(ObeliskController):
             key="sub_nearest_points_key",  # key can be specified here or in the config file
             msg_type=GridMap
         )
-        # Subscriber to laser scan
-        self.register_obk_subscription(
-            "sub_scan_setting",
-            self.laser_scan_callback,  # type: ignore
-            key="sub_scan_key",  # key can be specified here or in the config file
-            msg_type=LaserScan
-        )
+        # # Subscriber to laser scan
+        # self.register_obk_subscription(
+        #     "sub_scan_setting",
+        #     self.laser_scan_callback,  # type: ignore
+        #     key="sub_scan_key",  # key can be specified here or in the config file
+        #     msg_type=LaserScan
+        # )
         self.register_obk_publisher(
             "pub_viz_setting",
             key="pub_viz_key",  # key can be specified here or in the config file
@@ -211,27 +211,27 @@ class DynamicTubeMPCNode(ObeliskController):
         savemat("nearest_data.mat", {"nearest_dists": nearest_dists, "nearest_inds": nearest_inds, "map_origin": map_origin, "map_theta": map_theta})
         # raise RuntimeError()
 
-    def laser_scan_callback(self, scan_msg: LaserScan):
-        # Convert the laser scan into the odom frame
-        try:
-            self.laser_to_odom_transform = self.tf_buffer.lookup_transform("odom", scan_msg.header.frame_id, rclpy.time.Time(), Duration(seconds=1.0))
-        except tf2_ros.LookupException as e:
-            self.get_logger().warn(f"Transform error: {e}: odom -> {scan_msg.header.frame_id}")
-        angles = np.linspace(scan_msg.angle_min, scan_msg.angle_max, len(scan_msg.ranges))
-        ranges = np.array(scan_msg.ranges)
+    # def laser_scan_callback(self, scan_msg: LaserScan):
+    #     # Convert the laser scan into the odom frame
+    #     try:
+    #         self.laser_to_odom_transform = self.tf_buffer.lookup_transform("odom", scan_msg.header.frame_id, rclpy.time.Time(), Duration(seconds=1.0))
+    #     except tf2_ros.LookupException as e:
+    #         self.get_logger().warn(f"Transform error: {e}: odom -> {scan_msg.header.frame_id}")
+    #     angles = np.linspace(scan_msg.angle_min, scan_msg.angle_max, len(scan_msg.ranges))
+    #     ranges = np.array(scan_msg.ranges)
 
-        # Convert to Cartesian (laser frame)
-        valid = np.isfinite(ranges)  # Ignore NaN and inf values
-        x_laser = ranges[valid] * np.cos(angles[valid])
-        y_laser = ranges[valid] * np.sin(angles[valid])
-        points_laser = np.vstack((x_laser, y_laser, np.ones_like(x_laser)))  # Homogeneous coordinates
+    #     # Convert to Cartesian (laser frame)
+    #     valid = np.isfinite(ranges)  # Ignore NaN and inf values
+    #     x_laser = ranges[valid] * np.cos(angles[valid])
+    #     y_laser = ranges[valid] * np.sin(angles[valid])
+    #     points_laser = np.vstack((x_laser, y_laser, np.ones_like(x_laser)))  # Homogeneous coordinates
 
-        # Extract transformation matrix
-        H = self.transform_to_matrix(self.laser_to_odom_transform)
+    #     # Extract transformation matrix
+    #     H = self.transform_to_matrix(self.laser_to_odom_transform)
 
-        # Transform points to odom frame
-        scan_points = np.dot(H, points_laser)[:2].T  # Extract x, y
-        self.dtmpc.update_scan(scan_points)
+    #     # Transform points to odom frame
+    #     scan_points = np.dot(H, points_laser)[:2].T  # Extract x, y
+    #     self.dtmpc.update_scan(scan_points)
     
     def transform_to_matrix(self, transform):
         """Convert a ROS2 TransformStamped into a 3x3 homogeneous transformation matrix (2D)."""
@@ -364,16 +364,16 @@ class DynamicTubeMPCNode(ObeliskController):
         viz_msg.scale.x = 0.02
         viz_msg.scale.y = 0.02
         viz_msg.scale.z = 0.02
-        for i in range(z.shape[0]):
+        for i in range(self.z_path.shape[0]):
             point = Point()
-            point.x = z[i, 0]
-            point.y = z[i, 1]
+            point.x = self.z_path[i, 0]
+            point.y = self.z_path[i, 1]
             viz_msg.points.append(point)
             color = ColorRGBA()
             color.a = 1.
             color.r = 0.
-            color.b = (z.shape[0] - 1 - i) / (z.shape[0] - 1)
-            color.g = i / (z.shape[0] - 1)
+            color.b = (self.z_path.shape[0] - 1 - i) / (self.z_path.shape[0] - 1)
+            color.g = i / (self.z_path.shape[0] - 1)
             viz_msg.colors.append(color)
 
         self.obk_publishers["pub_viz_key"].publish(viz_msg)

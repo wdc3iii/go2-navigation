@@ -97,7 +97,7 @@ class DynamicTubeMPC:
         self.map_origin = np.zeros((2,))
         self.map_theta = 0
         self.map_unc_occ_nearest_inds = None
-        self.scan = None
+        # self.scan = None
         self.fix_internal_constraints = fix_internal_constraints
 
         # Casadi variables
@@ -222,8 +222,8 @@ class DynamicTubeMPC:
         self.v_prev[1:] = self.v_prev[:-1]
         self.v_prev[0] = v0
 
-    def update_scan(self, scan_points):
-        self.scan = scan_points
+    # def update_scan(self, scan_points):
+    #     self.scan = scan_points
 
     def update_nearest_inds(self, map_nearest_inds, nearest_map_dists, map_origin, map_theta):
         self.map_nearest_inds = map_nearest_inds
@@ -266,13 +266,14 @@ class DynamicTubeMPC:
     def compute_constraints(self):
         # Constraint buffer, size of voxel + robot radius
         constraint_buffer = -np.sqrt(2) * self.map_resolution / 2 - self.robot_radius
-        nearest_map_normals, nearest_map_dists, nearest_map_points = self.get_nearest_map_normals()
-        nearest_scan_normals, nearest_scan_dists, nearest_scan_points = self.get_nearest_scan_normals()
+        normals, dists, nearest_points = self.get_nearest_map_normals()
+        # nearest_map_normals, nearest_map_dists, nearest_map_points = self.get_nearest_map_normals()
+        # nearest_scan_normals, nearest_scan_dists, nearest_scan_points = self.get_nearest_scan_normals()
 
         # Combine map and scan
-        use_scan = nearest_scan_dists < np.abs(nearest_map_dists)
-        normals = np.where(use_scan[:, None], nearest_scan_normals, nearest_map_normals)
-        nearest_points = np.where(use_scan[:, None], nearest_scan_points, nearest_map_points)
+        # use_scan = nearest_scan_dists < np.abs(nearest_map_dists)
+        # normals = np.where(use_scan[:, None], nearest_scan_normals, nearest_map_normals)
+        # nearest_points = np.where(use_scan[:, None], nearest_scan_points, nearest_map_points)
 
         # Compute normals
         A = normals / np.linalg.norm(normals, axis=1, keepdims=True)
@@ -283,13 +284,19 @@ class DynamicTubeMPC:
         #     b[nearest_map_dists < 0] += (np.sqrt(2) + 1) * self.map_resolution / 2
 
         # Debugging
+        # savemat("constraints.mat", {
+        #     "A": A, "b": b,
+        #     "nearest_map_points": nearest_map_points,
+        #     "nearest_map_dists": nearest_map_dists,
+        #     "nearest_scan_points": nearest_scan_points,
+        #     "nearest_scan_dists": nearest_scan_dists,
+        #     "nearest_points": nearest_points,
+        #     "zwarm": self.z_warm
+        # })
         savemat("constraints.mat", {
             "A": A, "b": b,
-            "nearest_map_points": nearest_map_points,
-            "nearest_map_dists": nearest_map_dists,
-            "nearest_scan_points": nearest_scan_points,
-            "nearest_scan_dists": nearest_scan_dists,
             "nearest_points": nearest_points,
+            "dists": dists,
             "zwarm": self.z_warm
         })
         return A, b, nearest_points
@@ -451,54 +458,54 @@ class DynamicTubeMPC:
         norm = np.sqrt(dx**2 + dy**2) + 1e-6
         return np.array((dx / norm, dy / norm))  # safety function positive outside obstacles, gradient points out
 
-    def get_nearest_scan_points(self):
-        # Computes a KDTree of the scan points, and queries for closest distances
-        # O(NlogM) < O(NM) - beats brute force
-        tree = KDTree(self.scan)
-        dists, inds = tree.query(self.z_warm[1:, :2])  # Find nearest neighbor indices
-        return self.scan[inds], dists, inds
+    # def get_nearest_scan_points(self):
+    #     # Computes a KDTree of the scan points, and queries for closest distances
+    #     # O(NlogM) < O(NM) - beats brute force
+    #     tree = KDTree(self.scan)
+    #     dists, inds = tree.query(self.z_warm[1:, :2])  # Find nearest neighbor indices
+    #     return self.scan[inds], dists, inds
     
-    def get_nearest_scan_normals(self):
-        nearest_points, dists, nearest_inds = self.get_nearest_scan_points()
-        normals = np.zeros_like(nearest_points)
-        for i in range(nearest_points.shape[0]):
-            nearest_ind = nearest_inds[i]
-            normals[i, :] = self.compute_scan_obstacle_normal(nearest_ind)
+    # def get_nearest_scan_normals(self):
+    #     nearest_points, dists, nearest_inds = self.get_nearest_scan_points()
+    #     normals = np.zeros_like(nearest_points)
+    #     for i in range(nearest_points.shape[0]):
+    #         nearest_ind = nearest_inds[i]
+    #         normals[i, :] = self.compute_scan_obstacle_normal(nearest_ind)
 
-        savemat("scan_constraints_construction.mat", {
-            "A": normals, "b": -np.sum(normals * nearest_points, axis=1),
-            "nearest_points": nearest_points,
-            "nearest_dists": dists,
-            "zwarm": self.z_warm
-        })
-        return normals, dists, nearest_points
+    #     savemat("scan_constraints_construction.mat", {
+    #         "A": normals, "b": -np.sum(normals * nearest_points, axis=1),
+    #         "nearest_points": nearest_points,
+    #         "nearest_dists": dists,
+    #         "zwarm": self.z_warm
+    #     })
+    #     return normals, dists, nearest_points
     
-    def compute_scan_obstacle_normal(self, point):
-        pts = [(point - 1) % self.scan.shape[0], point, (point + 1) % self.scan.shape[0]]
-        neighbors = self.scan[pts]
-        rel_dist = np.linalg.norm(np.diff(neighbors, axis=0), axis=-1)
+    # def compute_scan_obstacle_normal(self, point):
+    #     pts = [(point - 1) % self.scan.shape[0], point, (point + 1) % self.scan.shape[0]]
+    #     neighbors = self.scan[pts]
+    #     rel_dist = np.linalg.norm(np.diff(neighbors, axis=0), axis=-1)
 
-        if rel_dist[0] > self.scan_rel_dist_cap and rel_dist[1] > self.scan_rel_dist_cap:
-            normal = np.zeros((2,))  # Suprious point
-        else:
-            # if rel_dist[0] > self.scan_rel_dist_cap:
-            #     x = neighbors[1:, 0]
-            #     y = neighbors[1:, 1]
-            # elif rel_dist[1] > self.scan_rel_dist_cap:
-            #     x = neighbors[:-1, 0]
-            #     y = neighbors[:-1, 1]
-            # else:
-            x = neighbors[:, 0]
-            y = neighbors[:, 1]
-            A = np.vstack([x, np.ones(len(x))]).T  # Linear regression matrix
-            slope, _ = np.linalg.lstsq(A, y, rcond=None)[0]
-            norm_length = np.sqrt(1 + slope**2) + 1e-6
-            normal = np.array([-slope, 1]) / norm_length  # Perpendicular to the tangent
-        # Ensure the normal points inward
-        to_center = self.z0[:2] - self.scan[point]
-        if np.dot(normal, to_center) < 0:
-            normal = -normal  # Flip the normal to point inward
-        return normal
+    #     if rel_dist[0] > self.scan_rel_dist_cap and rel_dist[1] > self.scan_rel_dist_cap:
+    #         normal = np.zeros((2,))  # Suprious point
+    #     else:
+    #         # if rel_dist[0] > self.scan_rel_dist_cap:
+    #         #     x = neighbors[1:, 0]
+    #         #     y = neighbors[1:, 1]
+    #         # elif rel_dist[1] > self.scan_rel_dist_cap:
+    #         #     x = neighbors[:-1, 0]
+    #         #     y = neighbors[:-1, 1]
+    #         # else:
+    #         x = neighbors[:, 0]
+    #         y = neighbors[:, 1]
+    #         A = np.vstack([x, np.ones(len(x))]).T  # Linear regression matrix
+    #         slope, _ = np.linalg.lstsq(A, y, rcond=None)[0]
+    #         norm_length = np.sqrt(1 + slope**2) + 1e-6
+    #         normal = np.array([-slope, 1]) / norm_length  # Perpendicular to the tangent
+    #     # Ensure the normal points inward
+    #     to_center = self.z0[:2] - self.scan[point]
+    #     if np.dot(normal, to_center) < 0:
+    #         normal = -normal  # Flip the normal to point inward
+    #     return normal
 
     def setup_ocp(self):
         self.z_lb = ca.DM(self.N + 1, self.n)

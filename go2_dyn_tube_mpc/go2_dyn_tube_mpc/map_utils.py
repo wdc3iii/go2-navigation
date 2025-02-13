@@ -102,7 +102,7 @@ class MapUtils:
         with self.lock:
             return map_to_pose(map_inds, self.map_origin, self.map_theta, self.resolution)
 
-    def get_nearest_inds(self, center, size):
+    def get_nearest_inds(self, center, size, scan_points=None):
         center_inds = self.pose_to_map(center)
         x1 = max(center_inds[0] - size, 0)
         x2 = min(center_inds[0] + size, self.shape[0])
@@ -111,6 +111,12 @@ class MapUtils:
 
         # Get the area of interest
         input_im_free = self[x1:x2, y1:y2] == self.FREE
+
+        # TODO: update input_im_free with scan points
+        if scan_points is not None:
+            scan_inds = self.pose_to_map(scan_points)
+            input_im_free[scan_inds] = self.OCCUPIED  # TODO: reverse indexing?\
+        
         input_im_occ = np.logical_not(input_im_free)
             
         # Compute the distance for the free space, and nearest indexes.

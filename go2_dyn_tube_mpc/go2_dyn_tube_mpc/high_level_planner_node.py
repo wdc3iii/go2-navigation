@@ -4,6 +4,7 @@ from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.lifecycle import LifecycleState, TransitionCallbackReturn
 
+from sensor_msgs.msg import LaserScan
 from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Pose2D, Point
@@ -160,6 +161,27 @@ class HighLevelPlannerNode(ObeliskController):
         update_occ = np.array(map_update_msg.data, dtype=np.int8).reshape(h, w)
         # self.explorer.update_map(update_occ, (x, y))
         self.explorer.update_map(update_occ, (x, y))
+    
+    def laser_scan_callback(self, scan_msg: LaserScan):
+        # Convert the laser scan into the odom frame
+        try:
+            self.laser_to_map_transform = self.tf_buffer.lookup_transform("map", scan_msg.header.frame_id, rclpy.time.Time(), Duration(seconds=1.0))
+        except tf2_ros.LookupException as e:
+            self.get_logger().warn(f"Transform error: {e}: map -> {scan_msg.header.frame_id}")
+        angles = np.linspace(scan_msg.angle_min, scan_msg.angle_max, len(scan_msg.ranges))
+        ranges = np.array(scan_msg.ranges)
+
+        # Convert to Cartesian (laser frame)
+        valid = np.isfinite(ranges)  # Ignore NaN and inf values
+        x_laser = ranges[valid] * np.cos(angles[valid])
+        y_laser = ranges[valid] * np.sin(angles[valid])
+        points_laser = np.vstack((x_laser, y_laser, np.ones_like(x_laser)))  # Homogeneous coordinates
+
+        # Extract transformation matrix
+        H = self.transform_to_matrix(self.laser_to_map_transform)
+
+        # Transform points to odom frame
+        self.scan_points = np.dot(H, points_laser)[:2].T  # Extract x, y
 
     def pub_nearest_points_callback(self):
         if not self.received_map:
@@ -186,7 +208,7 @@ class HighLevelPlannerNode(ObeliskController):
 
         # Compute submaps
         pz_x_map = np.array([map_to_base.transform.translation.x, map_to_base.transform.translation.y])
-        nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = self.explorer.compute_nearest_inds(pz_x_map, self.nearest_points_size)
+        nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = self.explorer.compute_nearest_inds(pz_x_map, self.nearest_points_size, self.scan_points)
 
         nearest_point_msg = GridMap()
         # Header
