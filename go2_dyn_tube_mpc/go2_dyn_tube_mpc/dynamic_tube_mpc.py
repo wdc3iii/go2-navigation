@@ -1,13 +1,31 @@
 from go2_dyn_tube_mpc.map_utils import map_to_pose, pose_to_map
 from go2_dyn_tube_mpc.load_tube_model import load_tube_model
 
+import os
+import sys
+import time
 import torch
 import numpy as np
 import casadi as ca
 import l4casadi as l4c
 from scipy.io import savemat
 from scipy.spatial import KDTree
+from contextlib import contextmanager
 from scipy.interpolate import interp1d
+
+
+@contextmanager
+def suppress_stdout():
+    fd = sys.stdout.fileno()
+    # Save the current stdout file descriptor
+    old_stdout = os.dup(fd)
+    with open(os.devnull, 'w') as devnull:
+        os.dup2(devnull.fileno(), fd)  # Redirect stdout to /dev/null
+        try:
+            yield
+        finally:
+            os.dup2(old_stdout, fd)  # Restore stdout
+            os.close(old_stdout)
 
 
 class DynamicTubeMPC:
@@ -15,7 +33,7 @@ class DynamicTubeMPC:
     def __init__(self, dt, N, H, n, m, Q, Qf, R, Rv_f, Rv_s, Q_sched, v_min, v_max, model_path, device,
                  robot_radius=0, map_resolution=0.05, obs_rho=100, scan_rel_dist_cap=0.5, normal_alpha=0.5,
                  w_max=2, obs_constraint_method="Constraint", fix_internal_constraints=False,
-                 solver_str="snopt", verbosity=0):
+                 solver_str="snopt", sqp_iters=5, snopt_iters=10, verbosity=0):
         # Dimensions
         self.N = N
         self.H = H
@@ -69,6 +87,8 @@ class DynamicTubeMPC:
         self.model_path = model_path
         self.device = device
         self.solver_str = solver_str
+        self.sqp_iters = sqp_iters
+        self.snopt_iters = snopt_iters
         self.verbosity = verbosity
 
         # Map / scan
@@ -95,49 +115,77 @@ class DynamicTubeMPC:
         self.nlp_opts = {}
         self.setup_ocp()
 
+        self.major_solve_count = 0
+        self.minor_solve_count = 0
+
     def solve(self):
-        params = self.init_params()
-        x_init = self.init_decision_var()
-        sol = self.nlp_solver(
-            x0=x_init, p=params, lbg=self.g_lb, ubg=self.g_ub, lbx=self.lbx(), ubx=self.ubx()
-        )
-        z, v, w = self.extract_solution(sol)
-        stats = self.nlp_solver.stats()
+        z, v, w, stats = None, None, None, None
 
-        # # TODO: Debugging
-        # with open("debugging_dtmpc.csv", 'w') as f:
-        #     data = [
-        #         ['Q', *self.Q.flatten().tolist()],
-        #         ['Qf', *self.Qf.flatten().tolist()],
-        #         ['Q_heading', self.Q_heading],
-        #         ['Qf_heading', self.Qf_heading],
-        #         ['R', *self.Q.flatten().flatten().tolist()],
-        #         ['Rv_f', *self.Rv_f.flatten().tolist()],
-        #         ['Rv_s', *self.Rv_s.flatten().tolist()],
-        #         ['Q_sched', *self.Q_sched.flatten().tolist()],
-        #         ['vmin', *self.v_min.flatten().tolist()],
-        #         ['vmax', *self.v_max.flatten().tolist()],
-        #         ['zref', *self.z_ref.flatten().tolist()],
-        #         ['vref', *self.v_ref.flatten().tolist()],
-        #         ['z0', *self.z0.flatten().tolist()],
-        #         ['z_warm', *self.z_warm.flatten().tolist()],
-        #         ['v_warm', *self.v_warm.flatten().tolist()],
-        #         ['z', *z.flatten().tolist()],
-        #         ['v', *v.flatten().tolist()]
-        #     ]
-        #     import csv
-        #     writer = csv.writer(f)
-        #     writer.writerows(data)
-        savemat("sol.mat", {
-            "z": z,
-            "v": v,
-            "zwarm": self.z_warm
-        })
-        self.z_warm = z.copy()
-        self.v_warm = v.copy()
-        self.w_warm = w.copy()
+        setup_times = []
+        solve_times = []
+        t0 = time.perf_counter_ns()
+        t1 = time.perf_counter_ns()
+        for _ in range(self.sqp_iters):
+            params = self.init_params()
+            x_init = self.init_decision_var()
+            t2 = time.perf_counter_ns()
+            with suppress_stdout():
+                sol = self.nlp_solver(
+                    x0=x_init, p=params, lbg=self.g_lb, ubg=self.g_ub, lbx=self.lbx(), ubx=self.ubx()
+                )
+            setup_times.append(t2 - t1)
+            t1 = time.perf_counter_ns()
+            solve_times.append(t1 - t2)
+            z, v, w = self.extract_solution(sol)
+            stats = self.nlp_solver.stats()
 
-        return z, v, w, stats["success"]
+            # # TODO: Debugging
+            # with open("debugging_dtmpc.csv", 'w') as f:
+            #     data = [
+            #         ['Q', *self.Q.flatten().tolist()],
+            #         ['Qf', *self.Qf.flatten().tolist()],
+            #         ['Q_heading', self.Q_heading],
+            #         ['Qf_heading', self.Qf_heading],
+            #         ['R', *self.Q.flatten().flatten().tolist()],
+            #         ['Rv_f', *self.Rv_f.flatten().tolist()],
+            #         ['Rv_s', *self.Rv_s.flatten().tolist()],
+            #         ['Q_sched', *self.Q_sched.flatten().tolist()],
+            #         ['vmin', *self.v_min.flatten().tolist()],
+            #         ['vmax', *self.v_max.flatten().tolist()],
+            #         ['zref', *self.z_ref.flatten().tolist()],
+            #         ['vref', *self.v_ref.flatten().tolist()],
+            #         ['z0', *self.z0.flatten().tolist()],
+            #         ['z_warm', *self.z_warm.flatten().tolist()],
+            #         ['v_warm', *self.v_warm.flatten().tolist()],
+            #         ['z', *z.flatten().tolist()],
+            #         ['v', *v.flatten().tolist()]
+            #     ]
+            #     import csv
+            #     writer = csv.writer(f)
+            #     writer.writerows(data)
+            savemat(f"dtmpc_solves/sol_{self.major_solve_count}_{self.minor_solve_count}.mat", {
+                "params": params,
+                "x_init": x_init,
+                "z": z,
+                "v": v,
+                "w": w,
+                "zwarm": self.z_warm
+            })
+            self.z_warm = z.copy()
+            self.v_warm = v.copy()
+            self.w_warm = w.copy()
+
+            self.minor_solve_count += 1
+
+        total_time = time.perf_counter_ns() - t0
+        setup_prop = sum(setup_times) / total_time
+        sol_prop = sum(solve_times) / total_time
+
+        self.major_solve_count += 1
+        self.minor_solve_count = 0
+
+        return z, v, w, stats["success"], \
+            f"DTMPC Timing: total: {total_time / 1e6:.2f}ms\tSetup Prop: {setup_prop:.3f}\tSol Prop: {sol_prop:.3f}"
 
     def set_input_bounds(self, v_min, v_max):
         assert v_min.shape == self.v_min.shape and v_max.shape == self.v_max.shape
@@ -570,12 +618,14 @@ class DynamicTubeMPC:
                 "ipopt.print_level": self.verbosity,  # Further suppress IPOPT messages
             }
         elif self.solver_str == "snopt":
-            self.nlp_opts = {"snopt": {
+            self.nlp_opts = {"verbose": self.verbosity > 0, "print_time": self.verbosity > 0, "snopt": {
                 "Major feasibility tolerance": 1e-6,
                 "Major optimality tolerance": 1e-3,
-                "Major iterations limit": 4,
+                "Major iterations limit": self.snopt_iters,
                 "Minor iterations limit": 20,
-                "Time limit": 0.1
+                "Time limit": 0.1,
+                "summary_file": '',
+                # "print_file": ''
             }}
         else:
             raise RuntimeError("Unknown solver_str")

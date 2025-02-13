@@ -293,17 +293,23 @@ class DynamicTubeMPCNode(ObeliskController):
             return 
 
         yaw = self.quat2yaw([odom_to_base.transform.rotation.x, odom_to_base.transform.rotation.y, odom_to_base.transform.rotation.z, odom_to_base.transform.rotation.w])
-        self.dtmpc.set_initial_condition(np.array([odom_to_base.transform.translation.x, odom_to_base.transform.translation.y, yaw]))
+        px_z0 = np.array([odom_to_base.transform.translation.x, odom_to_base.transform.translation.y, yaw])
+        if self.z_path is None:
+            self.dtmpc.set_initial_condition(px_z0)
+        else:
+            e0 = np.linalg.norm(self.z_path[1, :2] - px_z0[:2])
+            self.dtmpc.update_history(e0, self.v_path[0])
+            self.dtmpc.set_initial_condition(self.z_path[1])
         t0 = time.perf_counter_ns()
-        z, v, info = self.dtmpc.solve()
+        self.z_path, self.v_path, self.w_path, info = self.dtmpc.solve()
         self.get_logger().info(f"DTMPC solve took {(time.perf_counter_ns() - t0) * 1e-9}: Status {info}")
 
         # Construct the message
         traj_msg.horizon = self.dtmpc.N
         traj_msg.n = self.dtmpc.n
         traj_msg.m = self.dtmpc.m
-        traj_msg.z = z.flatten().tolist()
-        traj_msg.v = v.flatten().tolist()
+        traj_msg.z = self.z_path.flatten().tolist()
+        traj_msg.v = self.v_path.flatten().tolist()
         traj_msg.t = self.ts.tolist()
         
         self.obk_publishers["pub_ctrl"].publish(traj_msg)

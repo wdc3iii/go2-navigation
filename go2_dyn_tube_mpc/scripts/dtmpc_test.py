@@ -21,7 +21,8 @@ if __name__ == "__main__":
     res = 0.05
     robot_radius = 0.15
     model_path = "coleonguard-Georgia Institute of Technology/Deep_Tube_Training/gqzp1ubf_model:best"
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = "cpu"  #torch.device("cpu")
     v_max = np.array([0.5, 0.5, 1.5])
     v_min = np.array([-0.1, -0.5, -1.5])
     Q = np.array([1., 1., 0.1])
@@ -36,7 +37,7 @@ if __name__ == "__main__":
         Q, Qf, R, Rv_first, Rv_second, Q_sched,
         v_min, v_max,
         model_path, device,
-        robot_radius=robot_radius, obs_constraint_method="QuadraticPenalty", obs_rho=100
+        robot_radius=robot_radius, obs_constraint_method="Constraint", obs_rho=100
     )
     dtmpc.set_input_bounds(v_min, v_max)
     # Create problem
@@ -97,7 +98,8 @@ if __name__ == "__main__":
     for _ in range(125):
         nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw = explorer.compute_nearest_inds(dtmpc.z0[:2], 30)
         dtmpc.update_nearest_inds(nearest_inds, nearest_dists, sub_map_origin, sub_map_yaw)
-        z_sol, v_sol, w_sol, info = dtmpc.solve()
+        z_sol, v_sol, w_sol, info, timing_str = dtmpc.solve()
+        print(timing_str)
         z_all.append(z_sol[0])
         v_all.append(v_sol[0])
         w_all.append(w_sol[0])

@@ -76,3 +76,6 @@ WORKDIR /home/${USER}/repos
 RUN git clone https://github.com/Tim-Salzmann/l4casadi.git && cd l4casadi
 RUN pip install -r requirements_build.txt
 RUN pip install . --no-build-isolation
+
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/${USER}/libsnopt7
+ENV SNOPT_LICENSE=/home/${USER}/libsnopt7/snopt7.lic
